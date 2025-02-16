@@ -49,6 +49,16 @@ class LatentUpscaler:
         nn_upscaler = nn_upscale.NNLatentUpscale()
         return nn_upscaler.upscale(latent=latent, version=upscale_version, upscale=scale_factor)
 
+def recursion_to_list(obj, attr):
+    current = obj
+    yield current
+    while True:
+        current = getattr(current, attr, None)
+        if current is not None:
+            yield current
+        else:
+            return
+
 
 def getSlice(tensor, h, h_len, w, w_len):
     """
@@ -67,39 +77,28 @@ def getSlice(tensor, h, h_len, w, w_len):
     return tensor[:, :, h:h + h_len, w:w + w_len]
 
 def setSlice(tensor, tile, mask, h, h_len, w, w_len, padding=0):
-    """
-    Insert a tile into the larger tensor at the specified location, considering the mask.
+    print(tensor.dtype, tile.dtype, mask.dtype, tensor.device, tile.device, mask.device)
+    print("tensor min/max:", tensor.min().item(), tensor.max().item())
+    print("tile min/max:", tile.min().item(), tile.max().item())
+    print("mask min/max:", mask.min().item(), mask.max().item())
+    print("mask unique values:", mask.unique())
 
-    Args:
-        tensor: The tensor to which the tile will be inserted (e.g., the merged tensor).
-        tile: The tile to insert into the tensor.
-        mask: The mask that determines where the tile will be placed.
-        h: The starting height (y-coordinate) for the tile placement.
-        h_len: The height length of the tile.
-        w: The starting width (x-coordinate) for the tile placement.
-        w_len: The width length of the tile.
-        padding: The padding size to consider when placing the tile.
+    valid_h = max(1, min(h_len - 2 * padding, tensor.shape[2] - h))
+    valid_w = max(1, min(w_len - 2 * padding, tensor.shape[3] - w))
 
-    Returns:
-        The updated tensor with the tile inserted at the correct location.
-    """
-    valid_h = min(h_len - 2 * padding, tensor.shape[2] - h)
-    valid_w = min(w_len - 2 * padding, tensor.shape[3] - w)
-
-    # Adjusting the indices to handle padding and ensure the tile fits correctly
     start_h = padding
     start_w = padding
-    end_h = start_h + valid_h
-    end_w = start_w + valid_w
-
-    # Ensure that the tile fits within the bounds
-    end_h = min(end_h, tile.shape[2])
-    end_w = min(end_w, tile.shape[3])
+    end_h = min(start_h + valid_h, tile.shape[2])
+    end_w = min(start_w + valid_w, tile.shape[3])
 
     valid_tile = tile[:, :, start_h:end_h, start_w:end_w]
     valid_mask = mask[:, :, start_h:end_h, start_w:end_w]
 
-    # Perform the actual setting (similar to your merge_tiles function)
+    valid_tile = valid_tile.to(tensor.dtype).to(tensor.device)
+    valid_mask = valid_mask.to(tensor.dtype).to(tensor.device)
+
+    valid_mask = torch.clamp(valid_mask, min=0, max=1)  # 🔥 Ensures mask values are valid
+
     tensor[:, :, h:h + valid_h, w:w + valid_w] += valid_tile * valid_mask
 
     return tensor
@@ -111,6 +110,8 @@ class LatentTiler:
         return {
             "required": {
                 "latent": ("LATENT",),
+                "positive": ("CONDITIONING", {"tooltip": "The conditioning describing the attributes you want to include in the image."}),
+                "negative": ("CONDITIONING", {"tooltip": "The conditioning describing the attributes you want to exclude from the image."}),
                 "tile_height": ("INT", {"default": 64, "min": 1}),
                 "tile_width": ("INT", {"default": 64, "min": 1}),
                 "tiling_strategy": (["padded", "random", "random_strict", "simple"],),
@@ -133,7 +134,7 @@ class LatentTiler:
     def adjustTileSize_forPadding(self,tile_size,latent_size):
         return min(max(4, (tile_size // 4) * 4), latent_size)
     
-    def generatePositions (latent_size, tile_h, padding) -> List:
+    def generatePositions (self,latent_size, tile_h, padding) -> List:
         return list(range(0, latent_size, tile_h - padding))
     
     def generateNoise(self,latent, tile, seed, B, C, tile_w, tile_h, disable_noise: bool):
@@ -162,9 +163,149 @@ class LatentTiler:
         mask *= fade_x * fade_y  # Smooth blending
         return mask
     
-    def tileLatent(self, latent, tile_height, tile_width, tiling_strategy, padding_strategy, padding, seed, disable_noise):
+    def extractCnet(self, positive, negative):
+        cnets = [c['control'] for (_, c) in positive + negative if 'control' in c]
+        cnets = list(set([x for m in cnets for x in recursion_to_list(m, "previous_controlnet")]))  # Recursive extraction
+        return [x for x in cnets if isinstance(x, controlnet.ControlNet)]
+    
+    def prepareCnet_imgs(self, cnets, shape):
+        return [
+            torch.nn.functional.interpolate(m.cond_hint_original, (shape[-2] * 8, shape[-1] * 8), mode='nearest-exact').to('cpu')
+            if m.cond_hint_original.shape[-2] != shape[-2] * 8 or m.cond_hint_original.shape[-1] != shape[-1] * 8 else None
+            for m in cnets
+    ]
+
+    def slice_cnet(self, h, h_len, w, w_len, model:comfy.controlnet.ControlBase, img):
+        if img is None:
+            img = model.cond_hint_original
+        hint = self.getSlice(img, h*8, h_len*8, w*8, w_len*8)
+        if isinstance(model, comfy.controlnet.ControlLora):
+            model.cond_hint = hint.float().to(model.device)
+        else:
+            model.cond_hint = hint.to(model.control_model.dtype).to(model.control_model.device)
+
+    def prepareSlicedCnets(self, pos, neg, cnets, cnet_imgs, tile_h, tile_h_len, tile_w, tile_w_len):
+        for m, img in zip(cnets, cnet_imgs):
+            self.slice_cnet(tile_h, tile_h_len, tile_w, tile_w_len, m, img)
+            pos.append((None, {'control': m}))
+            neg.append((None, {'control': m}))
+
+
+    def extract_T2I(self, positive, negative):
+        t2is = [c['control'] for (_, c) in positive + negative if 'control' in c]
+        t2is = [x for m in t2is for x in recursion_to_list(m, "previous_controlnet")]  # Recursive extraction
+        return [x for x in t2is if isinstance(x, controlnet.T2IAdapter)]
+    
+    def prepareT2I_imgs(self, T2Is, shape):
+        return [
+            torch.nn.functional.interpolate(m.cond_hint_original, (shape[-2] * 8, shape[-1] * 8), mode='nearest-exact').to('cpu')
+            if m.cond_hint_original.shape[-2] != shape[-2] * 8 or m.cond_hint_original.shape[-1] != shape[-1] * 8 or (m.channels_in == 1 and m.cond_hint_original.shape[1] != 1) else None
+            for m in T2Is
+        ]
+    
+    def slices_T2I(self, h, h_len, w, w_len, model:comfy.controlnet.ControlBase, img):
+        model.control_input = None
+        if img is None:
+            img = model.cond_hint_original
+        model.cond_hint = self.getSlice(img, h*8, h_len*8, w*8, w_len*8).float().to(model.device)
+
+    def prepareSlicedT2Is(self, pos, neg, T2Is, T2I_imgs, tile_h, tile_h_len, tile_w, tile_w_len):
+        for m, img in zip(T2Is, T2I_imgs):
+            self.slices_T2I(tile_h, tile_h_len, tile_w, tile_w_len, m, img)
+            pos.append((None, {'control': m}))
+            neg.append((None, {'control': m}))
+
+    def extractGligen(self, positive, negative):
+        gligen_pos = [
+            c[1]['gligen'] if 'gligen' in c[1] else None
+            for c in positive
+        ]
+        gligen_neg = [
+            c[1]['gligen'] if 'gligen' in c[1] else None
+            for c in negative
+        ]
+        return gligen_pos, gligen_neg
+    
+    def sliceGligen(self, tile_h, tile_h_len, tile_w, tile_w_len, cond, gligen):
+        tile_h_end = tile_h + tile_h_len
+        tile_w_end = tile_w + tile_w_len
+        if gligen is None:
+            return
+        gligen_type = gligen[0]
+        gligen_model = gligen[1]
+        gligen_areas = gligen[2]
+        
+        gligen_areas_new = []
+        for emb, h_len, w_len, h, w in gligen_areas:
+            h_end = h + h_len
+            w_end = w + w_len
+            if h < tile_h_end and h_end > tile_h and w < tile_w_end and w_end > tile_w:
+                new_h = max(0, h - tile_h)
+                new_w = max(0, w - tile_w)
+                new_h_end = min(tile_h_end, h_end - tile_h)
+                new_w_end = min(tile_w_end, w_end - tile_w)
+                gligen_areas_new.append((emb, new_h_end - new_h, new_w_end - new_w, new_h, new_w))
+
+        if len(gligen_areas_new) == 0:
+            del cond['gligen']
+        else:
+            cond['gligen'] = (gligen_type, gligen_model, gligen_areas_new)
+
+    def prepsreSlicedGligen(self, pos, neg, gligen_pos, gligen_neg, tile_h, tile_h_len, tile_w, tile_w_len):
+        for cond, gligen in zip(pos, gligen_pos):
+            self.sliceGligen(tile_h, tile_h_len, tile_w, tile_w_len, cond, gligen)
+        for cond, gligen in zip(neg, gligen_neg):
+            self.sliceGligen(tile_h, tile_h_len, tile_w, tile_w_len, cond, gligen)
+
+    def extractSpatialConds(self, positive, negative, shape, device):
+        spatial_conds_pos = [
+            (c[1]['area'] if 'area' in c[1] else None, 
+                comfy.sample.prepare_mask(c[1]['mask'], shape, device) if 'mask' in c[1] else None)
+            for c in positive
+        ]
+        spatial_conds_neg = [
+            (c[1]['area'] if 'area' in c[1] else None, 
+                comfy.sample.prepare_mask(c[1]['mask'], shape, device) if 'mask' in c[1] else None)
+            for c in negative
+        ]
+        return (spatial_conds_pos, spatial_conds_neg)
+    
+    def sliceSpatialConds(self, tile_h, tile_h_len, tile_w, tile_w_len, cond, area):
+        tile_h_end = tile_h + tile_h_len
+        tile_w_end = tile_w + tile_w_len
+        coords = area[0] #h_len, w_len, h, w,
+        mask = area[1]
+        if coords is not None:
+            h_len, w_len, h, w = coords
+            h_end = h + h_len
+            w_end = w + w_len
+            if h < tile_h_end and h_end > tile_h and w < tile_w_end and w_end > tile_w:
+                new_h = max(0, h - tile_h)
+                new_w = max(0, w - tile_w)
+                new_h_end = min(tile_h_end, h_end - tile_h)
+                new_w_end = min(tile_w_end, w_end - tile_w)
+                cond[1]['area'] = (new_h_end - new_h, new_w_end - new_w, new_h, new_w)
+            else:
+                return (cond, True)
+        if mask is not None:
+            new_mask = self.getSlice(mask, tile_h, tile_h_len, tile_w, tile_w_len)
+            if new_mask.sum().cpu() == 0.0 and 'mask' in cond[1]:
+                return (cond, True)
+            else:
+                cond[1]['mask'] = new_mask
+        return (cond, False)
+    
+    def prepareSlicedConds(self, pos, neg, spatial_conds_pos, spatial_conds_neg, tile_h, tile_h_len, tile_w, tile_w_len):
+        pos = [self.sliceSpatialConds(tile_h, tile_h_len, tile_w, tile_w_len, c, area) for c, area in zip(pos, spatial_conds_pos)]
+        pos = [c for c, ignore in pos if not ignore]
+        neg = [self.sliceSpatialConds(tile_h, tile_h_len, tile_w, tile_w_len, c, area) for c, area in zip(neg, spatial_conds_neg)]
+        neg = [c for c, ignore in neg if not ignore]
+        return (pos, neg)
+    
+    def tileLatent(self, latent, positive, negative, tile_height, tile_width, tiling_strategy, padding_strategy, padding, seed, disable_noise):
         samples = latent["samples"]
-        B, C, H, W = samples.shape
+        shape = samples.shape
+        B, C, H, W = shape
         
         # Converts Size From Pixel to Latent
         tile_height = self.getLatentSize(tile_height)
@@ -183,25 +324,55 @@ class LatentTiler:
         h_positions = self.generatePositions(H, tile_h, padding)
         w_positions = self.generatePositions(W, tile_h, padding)
 
-        tiles, noise_tiles, masks, tile_positions = [], [], [], []
+        tiles, noise_tiles, denoise_masks, tile_positions, modified_positives, modified_negatives = [], [], [], [], [], []
+
+        # Extract and prepare cnets, T2Is, gligen, and spatial conditions
+        cnets = self.extractCnet(positive, negative)
+        cnet_imgs = self.prepareCnet_imgs(cnets, shape)
+        T2Is = self.extract_T2I(positive, negative)
+        T2I_imgs = self.prepareT2I_imgs(T2Is, shape)
+        gligen_pos, gligen_neg = self.extractGligen(positive, negative)
+        spatial_conds_pos, spatial_conds_neg = self.extractSpatialConds(positive, negative, shape, samples.device)
 
         for y in h_positions:
             for x in w_positions:
-                tile = getSlice(samples, y, tile_h, x, tile_w)
+                tile = self.getSlice(samples, y, tile_h, x, tile_w)
 
-                if(tiling_strategy == "padded"):
+                if tiling_strategy == "padded":
                     tile = self.applyPadding(tile, padding, padding_strategy) if padding > 0 else tile
-                    # Ensure mask matches padded tile dimensions
                     denoise_mask = self.createMask_forPadding(latent, B, tile.shape[2], tile.shape[3])
 
                 noise_tile = self.generateNoise(latent, tile, seed, B, C, tile_w, tile_h, disable_noise)
 
-                tiles.append({"samples": tile})
-                noise_tiles.append({"noise_tile": noise_tile})
-                masks.append({"denoise_mask": denoise_mask})
-                tile_positions.append((x, y))
+                # Copy positive and negative lists for modification
+                pos = [c.copy() for c in positive]
+                neg = [c.copy() for c in negative]
 
-        return tiles, noise_tiles, masks, tile_positions, (B, C, H, W)
+                # Slice cnets, T2Is, gligen, and spatial conditions for the current tile
+                self.prepareSlicedCnets(pos, neg, cnets, cnet_imgs, y, tile_h, x, tile_w)
+                self.prepareSlicedT2Is(pos, neg, T2Is, T2I_imgs, y, tile_h, x, tile_w)
+                
+                # Slice spatial conditions and update pos and neg
+                pos, neg = self.prepareSlicedConds(pos, neg, spatial_conds_pos, spatial_conds_neg, y, tile_h, x, tile_w)
+                
+                # Slice gligen and update pos and neg
+                self.prepsreSlicedGligen(pos, neg, gligen_pos, gligen_neg, y, tile_h, x, tile_w)
+
+                #### Appending Needed Tiles ####
+                # Apennd Sliced Tiles
+                tiles.append({"samples": tile})
+                # Append Noise Tile
+                noise_tiles.append({"noise_tile": noise_tile})
+                # Append Sliced Denooise Mask
+                denoise_masks.append({"denoise_mask": denoise_mask})
+                # Append Tile Postions
+                tile_positions.append((x, y))
+                # Append the modified pos and neg to the lists
+                modified_positives.append(pos)
+                modified_negatives.append(neg)
+
+        return tiles, noise_tiles, denoise_masks, tile_positions, modified_positives, modified_negatives, (B, C, H, W)
+
     
 class LatentMerger:
     @classmethod
@@ -209,8 +380,8 @@ class LatentMerger:
         return {
             "required": {
                 "tiles": ("LIST",),
+                "denoise_masks": ("LIST",),
                 "tile_positions": ("LIST",),
-                "masks": ("LIST",),
                 "original_size": ("TUPLE",),
                 "padding": ("INT", {"default": 16, "min": 0, "max": 128}),
             }
@@ -236,67 +407,48 @@ class LatentMerger:
         """Extracts a valid mask slice based on given start and end indices."""
         return mask[:, :, start_h:end_h, start_w:end_w]
 
-    def merge_tiles(self, tiles, tile_positions, masks, original_size, padding):
+    def merge_tiles(self, tiles, denoise_masks, tile_positions, original_size, padding):
         device = comfy.model_management.get_torch_device()
         B, C, H, W = original_size
 
-        # Converts Size From Pixel to Latent
         padding = self.getLatentSize(padding)
 
-        merged_samples = torch.zeros((B, C, H, W), device=device)
-        weight_map = torch.zeros((B, C, H, W), device=device)
+        merged_samples = torch.zeros((B, C, H, W), device=device)  # 🔥 Fix NaN issue
+        weight_map = torch.zeros((B, C, H, W), device=device)  # 🔥 Restore weight map
 
-        for tile_dict, mask_dict, (x, y) in zip(tiles, masks, tile_positions):
+        for tile_dict, mask_dict, (x, y) in zip(tiles, denoise_masks, tile_positions):
             tile = tile_dict["samples"].to(device)
             mask = mask_dict["denoise_mask"].to(device)
-
-            tile_height, tile_width = tile.shape[2], tile.shape[3]
 
             # Ensure the mask has the same channel count as the tile
             if mask.shape[1] == 1 and tile.shape[1] > 1:
                 mask = mask.expand(-1, tile.shape[1], -1, -1)
 
-            # Ensure tile and mask have the same shape
             assert tile.shape == mask.shape, f"[ERROR] Tile and Mask Shape Mismatch: {tile.shape} vs {mask.shape}"
 
-            # Compute valid region after padding
-            valid_h = self.getValid_regionAfterPadding(tileSize=tile_height, padding=padding, orig_latent_size=H, tile_pos=y)
-            valid_w = self.getValid_regionAfterPadding(tileSize=tile_width, padding=padding, orig_latent_size=W, tile_pos=x)
+            valid_h = self.getValid_regionAfterPadding(tile.shape[2], padding, H, y)
+            valid_w = self.getValid_regionAfterPadding(tile.shape[3], padding, W, x)
 
-            # Ensure edge tiles match expected size
-            start_h, start_w = padding, padding
-            end_h, end_w = start_h + valid_h, start_w + valid_w
+            valid_tile = self.get_valid_tile(tile, padding, padding + valid_h, padding, padding + valid_w)
+            valid_mask = self.get_valid_mask(mask, padding, padding + valid_h, padding, padding + valid_w)
 
-            if end_h > tile_height:
-                end_h = tile_height
-                start_h = max(0, tile_height - valid_h)  # Adjust to keep size consistent
-            if end_w > tile_width:
-                end_w = tile_width
-                start_w = max(0, tile_width - valid_w)  # Adjust to keep size consistent
-
-            valid_tile = self.get_valid_tile(tile, start_h, end_h, start_w, end_w)
-            valid_mask = self.get_valid_mask(mask, start_h, end_h, start_w, end_w)
-
-            # Ensure shape consistency
             assert valid_tile.shape == valid_mask.shape, f"[ERROR] Valid Tile & Mask Mismatch: {valid_tile.shape} vs {valid_mask.shape}"
 
-            merged_samples = setSlice(merged_samples, valid_tile, valid_mask, y, valid_h, x, valid_w)
+            merged_samples = self.setSlice(merged_samples, valid_tile, valid_mask, y, valid_h, x, valid_w)
 
-        merged_samples /= torch.clamp(weight_map, min=1e-6)
+            # 🔥 Restore weight map accumulation
+            weight_map[:, :, y:y + valid_h, x:x + valid_w] += valid_mask
+
+        merged_samples /= torch.clamp(weight_map, min=1e-6)  # 🔥 Correct division
         return ({"samples": merged_samples},)
 
+        merged_samples /= torch.clamp(weight_map, min=1e-6)
+        print("After merging - merged_samples min/max:", merged_samples.min().item(), merged_samples.max().item())
+        print("After merging - weight_map min/max:", weight_map.min().item(), weight_map.max().item())
+        return ({"samples": merged_samples},)
+    
+
 class TKS_Base:
-    def extract_cnets(self,positive, negative):
-        cnets = [c['control'] for (_, c) in positive + negative if 'control' in c]
-        cnets = list(set([x for m in cnets for x in recursion_to_list(m, "previous_controlnet")]))  # Recursive extraction
-        return [x for x in cnets if isinstance(x, controlnet.ControlNet)]
-
-    # Helper to extract T2I adapters (T2Is) from positive and negative conditions
-    def extract_t2is(self,positive, negative):
-        t2is = [c['control'] for (_, c) in positive + negative if 'control' in c]
-        t2is = [x for m in t2is for x in recursion_to_list(m, "previous_controlnet")]  # Recursive extraction
-        return [x for x in t2is if isinstance(x, controlnet.T2IAdapter)]
-
     def common_ksampler(
             self,
             model, 
@@ -331,8 +483,10 @@ class TKS_Base:
         
         # Step 2: Tile Latent **and Noise**
         tiler = LatentTiler()
-        tiles, noise_tiles, denoise_mask, tile_positions, original_size = tiler.tileLatent(
+        tiles, noise_tiles, denoise_masks, tile_positions, modified_positives, modified_negatives, original_size = tiler.tileLatent(
             latent=latent,
+            positive=positive, 
+            negative=negative,
             tile_width=tile_width,
             tile_height=tile_height, 
             tiling_strategy=tiling_strategy,
@@ -354,7 +508,8 @@ class TKS_Base:
             device=device, 
             sampler=sampler_name, 
             scheduler=scheduler, 
-            denoise=denoise
+            denoise=denoise,
+            model_options=model.model_options
         )
         
         processed_tiles = []
@@ -383,11 +538,11 @@ class TKS_Base:
                     pbar.update_absolute(step, preview=preview_bytes)
 
             # Process each tile
-            for tile_index, (tile, noise_tile, denoise_mask) in enumerate(zip(tiles, noise_tiles, denoise_mask)):
+            for tile_index, (tile, noise_tile, denoise_mask, mp, mn) in enumerate(zip(tiles, noise_tiles, denoise_masks, modified_positives, modified_negatives)):
                 processed_tile = sampler.sample(
                     noise=noise_tile["noise_tile"],
-                    positive=positive,
-                    negative=negative,
+                    positive=mp,
+                    negative=mn,
                     cfg=cfg,
                     latent_image=tile["samples"],
                     start_step=start_step,
@@ -402,9 +557,7 @@ class TKS_Base:
 
         # Step 4: Merge Tiles
         merger = LatentMerger()
-        merged_latent = merger.merge_tiles(
-            processed_tiles, tile_positions, denoise_mask, original_size, padding
-        )[0]
+        merged_latent = merger.merge_tiles(processed_tiles, denoise_masks, tile_positions, original_size, padding)[0]
 
         return (merged_latent,)
 
@@ -510,8 +663,6 @@ class LatentPipeline:
             scale_factor, 
             upscale_version,
         ):
-    
-        device = comfy.model_management.get_torch_device()
 
         # Step 1: Upscale Latent
         upscaler = LatentUpscaler()
