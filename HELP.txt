@@ -1,0 +1,2 @@
+
+git remote add origin https://github.com/thisiseddy-ab/ComfyUI-Edins-Ultimate-Pack.git
