@@ -1,0 +1,14 @@
+# Ignore everything
+*
+
+# Except this directory
+!*/
+
+# Ignore all files in the root directory
+/*
+
+# Except the files in this directory
+!.gitignore
+!__init__.py
+!HELP.txt
+!EUP/
