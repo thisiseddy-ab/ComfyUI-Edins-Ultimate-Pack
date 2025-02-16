@@ -7,7 +7,7 @@
 # Ignore all files in the root directory
 /*
 
-# Except the files in this directory
+# Except the necessary files in this directory
 !.gitignore
 !__init__.py
 !HELP.txt
@@ -15,3 +15,7 @@
 # Include everything in the EUP directory
 !EUP/
 !EUP/**
+
+# Ignore __pycache__ directories everywhere
+__pycache__/
+**/__pycache__/
