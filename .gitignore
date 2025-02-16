@@ -1,7 +1,7 @@
 # Ignore everything
 *
 
-# Except this directory
+# Do not ignore directories, so we can include specific files within them
 !*/
 
 # Ignore all files in the root directory
@@ -11,4 +11,7 @@
 !.gitignore
 !__init__.py
 !HELP.txt
+
+# Include everything in the EUP directory
 !EUP/
+!EUP/**
