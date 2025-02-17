@@ -16,6 +16,11 @@
 !EUP/
 !EUP/**
 
-# Ignore __pycache__ directories everywhere
+# Ignore compiled Python files
+*.pyc
+*.pyo
+*.pyd
+
+# Ignore __pycache__ directories
 __pycache__/
 **/__pycache__/

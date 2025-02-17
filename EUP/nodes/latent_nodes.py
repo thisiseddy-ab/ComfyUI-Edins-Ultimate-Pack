@@ -77,11 +77,12 @@ def getSlice(tensor, h, h_len, w, w_len):
     return tensor[:, :, h:h + h_len, w:w + w_len]
 
 def setSlice(tensor, tile, mask, h, h_len, w, w_len, padding=0):
-    print(tensor.dtype, tile.dtype, mask.dtype, tensor.device, tile.device, mask.device)
-    print("tensor min/max:", tensor.min().item(), tensor.max().item())
-    print("tile min/max:", tile.min().item(), tile.max().item())
-    print("mask min/max:", mask.min().item(), mask.max().item())
-    print("mask unique values:", mask.unique())
+    
+    #print(tensor.dtype, tile.dtype, mask.dtype, tensor.device, tile.device, mask.device)
+    #print("tensor min/max:", tensor.min().item(), tensor.max().item())
+    #print("tile min/max:", tile.min().item(), tile.max().item())
+    #print("mask min/max:", mask.min().item(), mask.max().item())
+    #print("mask unique values:", mask.unique())
 
     valid_h = max(1, min(h_len - 2 * padding, tensor.shape[2] - h))
     valid_w = max(1, min(w_len - 2 * padding, tensor.shape[3] - w))
@@ -94,6 +95,7 @@ def setSlice(tensor, tile, mask, h, h_len, w, w_len, padding=0):
     valid_tile = tile[:, :, start_h:end_h, start_w:end_w]
     valid_mask = mask[:, :, start_h:end_h, start_w:end_w]
 
+    ## Try Commentig This You Have Problem
     valid_tile = valid_tile.to(tensor.dtype).to(tensor.device)
     valid_mask = valid_mask.to(tensor.dtype).to(tensor.device)
 
@@ -411,10 +413,13 @@ class LatentMerger:
         device = comfy.model_management.get_torch_device()
         B, C, H, W = original_size
 
+        # Ensure padding is correctly processed
         padding = self.getLatentSize(padding)
+        valid_padding_h = min(padding, H // 2)
+        valid_padding_w = min(padding, W // 2)
 
-        merged_samples = torch.zeros((B, C, H, W), device=device)  # 🔥 Fix NaN issue
-        weight_map = torch.zeros((B, C, H, W), device=device)  # 🔥 Restore weight map
+        merged_samples = torch.zeros((B, C, H, W), device=device)
+        weight_map = torch.zeros((B, C, H, W), device=device)  
 
         for tile_dict, mask_dict, (x, y) in zip(tiles, denoise_masks, tile_positions):
             tile = tile_dict["samples"].to(device)
@@ -426,11 +431,11 @@ class LatentMerger:
 
             assert tile.shape == mask.shape, f"[ERROR] Tile and Mask Shape Mismatch: {tile.shape} vs {mask.shape}"
 
-            valid_h = self.getValid_regionAfterPadding(tile.shape[2], padding, H, y)
-            valid_w = self.getValid_regionAfterPadding(tile.shape[3], padding, W, x)
+            valid_h = self.getValid_regionAfterPadding(tile.shape[2], valid_padding_h, H, y)
+            valid_w = self.getValid_regionAfterPadding(tile.shape[3], valid_padding_w, W, x)
 
-            valid_tile = self.get_valid_tile(tile, padding, padding + valid_h, padding, padding + valid_w)
-            valid_mask = self.get_valid_mask(mask, padding, padding + valid_h, padding, padding + valid_w)
+            valid_tile = self.get_valid_tile(tile, valid_padding_h, valid_padding_h + valid_h, valid_padding_w, valid_padding_w + valid_w)
+            valid_mask = self.get_valid_mask(mask, valid_padding_h, valid_padding_h + valid_h, valid_padding_w, valid_padding_w + valid_w)
 
             assert valid_tile.shape == valid_mask.shape, f"[ERROR] Valid Tile & Mask Mismatch: {valid_tile.shape} vs {valid_mask.shape}"
 
@@ -439,12 +444,10 @@ class LatentMerger:
             # 🔥 Restore weight map accumulation
             weight_map[:, :, y:y + valid_h, x:x + valid_w] += valid_mask
 
-        merged_samples /= torch.clamp(weight_map, min=1e-6)  # 🔥 Correct division
-        return ({"samples": merged_samples},)
-
         merged_samples /= torch.clamp(weight_map, min=1e-6)
         print("After merging - merged_samples min/max:", merged_samples.min().item(), merged_samples.max().item())
         print("After merging - weight_map min/max:", weight_map.min().item(), weight_map.max().item())
+        
         return ({"samples": merged_samples},)
     
 
