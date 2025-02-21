@@ -427,30 +427,14 @@ class Padded_Tiling_Service():
         return mask
     
     def hp_applyHPStrategy(self, latent, tile, x, y, B, C, num_tiles_x, num_tiles_y, padding, padding_strategy, seed, disable_noise):
-        #print("Tile Before - Top row:", tile[:, :, 0, :])
-        #print("Tile Before - Bottom row:", tile[:, :, -1, :])
-        #print("Tile Before - Paddi8ng Left column:", tile[:, :, :, 0])
-        #print("Tile Before - Padding Right column:", tile[:, :, :, -1])
-        
-        
         tile = self.hp_applyPadding(tile, padding, padding_strategy, x, y, num_tiles_x, num_tiles_y)
 
-        print("Tile After - Top row:", tile[:, :, 0, :])
-        print("Tile After - Bottom row:", tile[:, :, -1, :])
-        print("Tile After - Paddi8ng Left column:", tile[:, :, :, 0])
-        print("Tile After - Padding Right column:", tile[:, :, :, -1])
-        
         # Get final padded dimensions
         padded_h = tile.shape[-2]
         padded_w = tile.shape[-1]
         
         noise = self.generaterandNoise_forPaddStrg(latent, tile, seed, B, C, padded_w, padded_h, disable_noise)
         mask = self.hp_createMask(B, padded_h, padded_w)
-
-        print("Tile Mask - Top row:", mask[:, :, 0, :])
-        print("Tile Mask - Bottom row:", mask[:, :, -1, :])
-        print("Tile Mask - Left column:", mask[:, :, :, 0])
-        print("Tile Mask - Right column:", mask[:, :, :, -1])
         
         return (tile, noise, mask)
 
@@ -632,7 +616,7 @@ class LatentMerger:
     RETURN_TYPES = ("LATENT",)
     FUNCTION = "mergeTiles"
 
-    def mergeTiles(self, tiles, blending_masks, tile_positions, original_size, blend_strength=0.03):
+    def mergeTiles(self, tiles, blending_masks, tile_positions, original_size, blend_strength=0.01):
         device = comfy.model_management.get_torch_device()
         B, C, H, W = original_size
 
@@ -648,7 +632,7 @@ class LatentMerger:
             self.applyTiletoMerged(merged_samples, weight_map, valid_tile, valid_mask, x, y)
 
         merged_samples = self.normalizeOutput(merged_samples, weight_map)
-        merged_samples = self.applyEdgeRefinement(merged_samples, tile_positions, blend_strength)
+        merged_samples = self.applyHP_strategyBlend(merged_samples, tile_positions, blend_strength)
         
         print(f"[DEBUG] Merged Output Shape: {merged_samples.shape}")
         return ({"samples": merged_samples},)
@@ -668,23 +652,32 @@ class LatentMerger:
     def normalizeOutput(self, merged_samples, weight_map):
         weight_map = torch.clamp(weight_map, min=1e-6)  # Prevent division by zero
         return merged_samples / weight_map
-
+    
     # --- Strategy-Specific Code ---
-    def applyEdgeRefinement(self, merged_samples, tile_positions, blend_strength):
+    def applyHP_strategyBlend(self, merged_samples, tile_positions, blend_strength):
         blend_width = 1
         B, C, H, W = merged_samples.shape
 
         for b in range(B):
             for c in range(C):
                 for x, y in tile_positions:
-                    merged_samples = self.refineEdges(merged_samples, b, c, x, y, blend_strength, blend_width)
-
-                merged_samples[b, c, 0, :] = torch.lerp(merged_samples[b, c, 0, :], merged_samples[b, c, 1, :], 0.1 * blend_strength)
-                merged_samples[b, c, :, 0] = torch.lerp(merged_samples[b, c, :, 0], merged_samples[b, c, :, 1], 0.1 * blend_strength)
-
-        return merged_samples
-
-    def refineEdges(self, merged_samples, b, c, x, y, blend_strength, blend_width):
+                    if x > 0:
+                        edge_diff_x = torch.abs(merged_samples[b, c, :, x] - merged_samples[b, c, :, x-1])
+                        adaptive_blend_x = torch.clamp(1.0 - edge_diff_x.mean(), 0.02, 0.08) * blend_strength
+                        merged_samples[b, c, :, x-blend_width:x+blend_width] = torch.lerp(
+                            merged_samples[b, c, :, x-blend_width:x+blend_width],
+                            merged_samples[b, c, :, x-1:x+1],
+                            adaptive_blend_x
+                        )
+                    
+                    if y > 0:
+                        edge_diff_y = torch.abs(merged_samples[b, c, y, :] - merged_samples[b, c, y-1, :])
+                        adaptive_blend_y = torch.clamp(1.0 - edge_diff_y.mean(), 0.02, 0.08) * blend_strength
+                        merged_samples[b, c, y-blend_width:y+blend_width, :] = torch.lerp(
+                            merged_samples[b, c, y-blend_width:y+blend_width, :],
+                            merged_samples[b, c, y-1:y+1, :],
+                            adaptive_blend_y
+                        )
         if x > 0:
             edge_diff_x = torch.abs(merged_samples[b, c, :, x] - merged_samples[b, c, :, x-1])
             adaptive_blend_x = torch.clamp(1.0 - edge_diff_x.mean(), 0.02, 0.08) * blend_strength
@@ -702,6 +695,7 @@ class LatentMerger:
                 merged_samples[b, c, y-1:y+1, :],
                 adaptive_blend_y
             )
+
         return merged_samples
         
 class TKS_Base:
@@ -814,7 +808,7 @@ class TKS_Base:
 
         # Step 4: Merge Tiles
         merger = LatentMerger()
-        merged_latent = merger.mergeTiles(processed_tiles, blending_masks, tile_positions, original_size, blend_strength=0.3)[0]
+        merged_latent = merger.mergeTiles(processed_tiles, blending_masks, tile_positions, original_size, blend_strength=0.1)[0]
 
         return (merged_latent,)
 
