@@ -241,6 +241,7 @@ class TensorService():
         
         tensor[:, :, h:h + valid_h, w:w + valid_w] += valid_tile * valid_mask
         return tensor
+    
     def getSlice(self, tensor, h, h_len, w, w_len):
         """
         Extract a slice from the input tensor at the specified location and size.
@@ -288,7 +289,15 @@ class Padded_Tiling_Service():
     def applyOrganicPadding(self, tile, pad):
         """Applies seamless mirrored padding with soft blending and natural variation, avoiding boxy artifacts."""
         B, C, H, W = tile.shape
-        left, right, top, bottom = pad
+        
+        # Unpack padding only for the sides where padding exists (values > 0)
+        pad_len = len(pad)
+        
+        # Default to 0 for missing sides (we could append missing sides as 0, so no padding is applied)
+        left = pad[0] if pad_len > 0 else 0
+        right = pad[1] if pad_len > 1 else 0
+        top = pad[2] if pad_len > 2 else 0
+        bottom = pad[3] if pad_len > 3 else 0
 
         print(f"Original tile shape: {tile.shape}")
         print(f"Padding values: left={left}, right={right}, top={top}, bottom={bottom}")
@@ -352,47 +361,96 @@ class Padded_Tiling_Service():
     def hp_applyPadding(self, tile, padding, strategy, pos_x, pos_y, num_tiles_x, num_tiles_y):
         """Applies padding between tiles and scales tiles down if necessary."""
         if padding > 0:
-            # Calculate padding for each side based on position
-            left = 0 if pos_x == 0 else padding
-            right = 0 if pos_x == num_tiles_x - 1 else padding
-            top = 0 if pos_y == 0 else padding
-            bottom = 0 if pos_y == num_tiles_y - 1 else padding
-            
-            # Apply padding
-            pad = (left, right, top, bottom)
-            
-            # Apply padding to the tile using the specified strategy
-            if strategy in ["circular", "reflect", "replicate"]:
-                return F.pad(tile, pad, mode=strategy)
-            elif strategy == "organic_padding":
-                return self.applyOrganicPadding(tile, pad)
+            # Initialize padding tuple (no padding by default)
+            pad = []
+
+            # Add padding for each side based on the tile's position
+            if pos_x != 0:  # Not the leftmost tile
+                pad.append(padding)
             else:
-                return F.pad(tile, pad, mode="constant", value=0)
-        
+                pad.append(0)  # No padding on the left side
+            
+            if pos_x != num_tiles_x - 1:  # Not the rightmost tile
+                pad.append(padding)
+            else:
+                pad.append(0)  # No padding on the right side
+
+            if pos_y != 0:  # Not the topmost tile
+                pad.append(padding)
+            else:
+                pad.append(0)  # No padding on the top side
+            
+            if pos_y != num_tiles_y - 1:  # Not the bottommost tile
+                pad.append(padding)
+            else:
+                pad.append(0)  # No padding on the bottom side
+
+            # Apply padding based on the strategy
+            if strategy in ["circular", "reflect", "replicate"]:
+                return F.pad(tile, tuple(pad), mode=strategy)
+            elif strategy == "organic_padding":
+                return self.applyOrganicPadding(tile, tuple(pad))
+            else:
+                return F.pad(tile, tuple(pad), mode="constant", value=0)  # Default constant padding with 0 for normal use cases
+
         return tile
 
-    def hp_createMask(self, latent, batch_size, padded_h, padded_w):
-        """Creates a mask for blending tiles, ensuring it matches padded tile size."""
-        samples = latent.get("samples")
+    def hp_createMask(self, batch_size, padded_h, padded_w):
+        """Creates a smooth blending mask for latent tiles."""
         
-        # Ensure the mask is created with the final padded size
-        mask = torch.ones((batch_size, 1, padded_h, padded_w), dtype=samples.dtype, device="cpu")
+        # Grid for radial blending
+        grid_x, grid_y = torch.meshgrid(
+            torch.linspace(-1, 1, padded_h, device="cpu"),
+            torch.linspace(-1, 1, padded_w, device="cpu"),
+            indexing="ij",
+        )
+
+        # Compute radial distance
+        radius = torch.sqrt(grid_x**2 + grid_y**2)
         
-        fade_x = torch.linspace(0, 1, padded_w, device="cpu").view(1, 1, 1, -1)
-        fade_y = torch.linspace(0, 1, padded_h, device="cpu").view(1, 1, -1, 1)
+        # Apply a cosine-based fade (soft at edges, sharp in center)
+        fade_radial = 0.5 * (1 - torch.cos(torch.clamp(radius * torch.pi, 0, torch.pi)))
         
-        mask *= fade_x * fade_y  # Smooth blending
+        # Directional fades to prevent excessive center softening
+        fade_x = 0.5 * (1 - torch.cos(torch.linspace(0, torch.pi, padded_w, device="cpu"))).view(1, 1, 1, -1)
+        fade_y = 0.5 * (1 - torch.cos(torch.linspace(0, torch.pi, padded_h, device="cpu"))).view(1, 1, -1, 1)
+        
+        # Merge both blending styles
+        fade = fade_radial * fade_x * fade_y
+        
+        # Adjust the mask to avoid too much softening at the center
+        fade = torch.clamp(fade, min=0.01)  # Prevent total blackness
+        
+        # Ensure proper batch size
+        mask = fade.expand(batch_size, 1, padded_h, padded_w)
+        
         return mask
     
     def hp_applyHPStrategy(self, latent, tile, x, y, B, C, num_tiles_x, num_tiles_y, padding, padding_strategy, seed, disable_noise):
+        #print("Tile Before - Top row:", tile[:, :, 0, :])
+        #print("Tile Before - Bottom row:", tile[:, :, -1, :])
+        #print("Tile Before - Paddi8ng Left column:", tile[:, :, :, 0])
+        #print("Tile Before - Padding Right column:", tile[:, :, :, -1])
+        
+        
         tile = self.hp_applyPadding(tile, padding, padding_strategy, x, y, num_tiles_x, num_tiles_y)
+
+        print("Tile After - Top row:", tile[:, :, 0, :])
+        print("Tile After - Bottom row:", tile[:, :, -1, :])
+        print("Tile After - Paddi8ng Left column:", tile[:, :, :, 0])
+        print("Tile After - Padding Right column:", tile[:, :, :, -1])
         
         # Get final padded dimensions
         padded_h = tile.shape[-2]
         padded_w = tile.shape[-1]
         
         noise = self.generaterandNoise_forPaddStrg(latent, tile, seed, B, C, padded_w, padded_h, disable_noise)
-        mask = self.hp_createMask(latent, B, padded_h, padded_w)
+        mask = self.hp_createMask(B, padded_h, padded_w)
+
+        print("Tile Mask - Top row:", mask[:, :, 0, :])
+        print("Tile Mask - Bottom row:", mask[:, :, -1, :])
+        print("Tile Mask - Left column:", mask[:, :, :, 0])
+        print("Tile Mask - Right column:", mask[:, :, :, -1])
         
         return (tile, noise, mask)
 
