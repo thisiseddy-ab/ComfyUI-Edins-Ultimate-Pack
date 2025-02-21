@@ -1,6 +1,7 @@
 #### Build In Lib's #####
 import sys
 import os
+import random
 from typing import List
 
 
@@ -275,12 +276,6 @@ class Padded_Tiling_Service():
             positions[-1] = latent_size - tile_size
 
         return positions
-
-        # Ensure the last tile aligns properly with latent size
-        if positions[-1] + tile_size > latent_size:
-            positions[-1] = latent_size - tile_size
-
-        return positions
     
     def generaterandNoise_forPaddStrg(self, latent, tile, seed, B, C, tile_w, tile_h, disable_noise: bool):
         samples = latent.get("samples")
@@ -289,9 +284,74 @@ class Padded_Tiling_Service():
         else:
             batch_inds = latent.get("batch_index")
             return comfy.sample.prepare_noise(tile, seed, batch_inds)
-        
+    
+    def applyOrganicPadding(self, tile, pad):
+        """Applies seamless mirrored padding with soft transitions and random variation, including corners."""
+        B, C, H, W = tile.shape
+        left, right, top, bottom = pad
 
-    def hp_applyPadding(self, tile, padding, strategy, pos_x, pos_y, num_tiles_x, num_tiles_y,):
+        print(f"Original tile shape: {tile.shape}")
+        print(f"Padding values: left={left}, right={right}, top={top}, bottom={bottom}")
+
+        # Create the padded tile
+        padded_tile = torch.zeros((B, C, H + top + bottom, W + left + right), device=tile.device, dtype=tile.dtype)
+
+        # Place the original tile in the center
+        padded_tile[:, :, top:top + H, left:left + W] = tile
+
+        def smooth_blend(patch, expand_shape, flip_dims):
+            """Mirrors a patch and blends it smoothly with Perlin noise variation."""
+            mirrored = patch
+            for flip_dim in flip_dims:
+                mirrored = torch.flip(mirrored, dims=[flip_dim])  # Mirror flip in both directions
+
+            # Soft gradient blending (prevents harsh mirror seams)
+            grad_x = torch.linspace(1.0, 0.0, expand_shape[3], device=tile.device).reshape(1, 1, 1, -1)
+            grad_y = torch.linspace(1.0, 0.0, expand_shape[2], device=tile.device).reshape(1, 1, -1, 1)
+            grad_blend = grad_x * grad_y  # Multiply gradients for corner blending
+
+            # Perlin-style noise variation (removes straight artifacts)
+            noise = (torch.rand_like(grad_blend) - 0.5) * 0.1  # Soft randomness
+            grad_blend = torch.clamp(grad_blend + noise, 0.0, 1.0)
+
+            return (patch * grad_blend + mirrored * (1 - grad_blend)).expand(expand_shape)
+
+        # Left padding
+        if left > 0:
+            left_patch = smooth_blend(tile[:, :, :, :left], (B, C, H, left), flip_dims=[3])
+            padded_tile[:, :, top:top + H, :left] = left_patch
+
+        # Right padding
+        if right > 0:
+            right_patch = smooth_blend(tile[:, :, :, -right:], (B, C, H, right), flip_dims=[3])
+            padded_tile[:, :, top:top + H, -right:] = right_patch
+
+        # Top padding
+        if top > 0:
+            top_patch = smooth_blend(tile[:, :, :top, :], (B, C, top, W), flip_dims=[2])
+            padded_tile[:, :, :top, left:left + W] = top_patch
+
+        # Bottom padding
+        if bottom > 0:
+            bottom_patch = smooth_blend(tile[:, :, -bottom:, :], (B, C, bottom, W), flip_dims=[2])
+            padded_tile[:, :, -bottom:, left:left + W] = bottom_patch
+
+        # Corner regions (blend both directions)
+        if left > 0 and top > 0:
+            padded_tile[:, :, :top, :left] = smooth_blend(tile[:, :, :top, :left], (B, C, top, left), flip_dims=[2, 3])
+
+        if right > 0 and top > 0:
+            padded_tile[:, :, :top, -right:] = smooth_blend(tile[:, :, :top, -right:], (B, C, top, right), flip_dims=[2, 3])
+
+        if left > 0 and bottom > 0:
+            padded_tile[:, :, -bottom:, :left] = smooth_blend(tile[:, :, -bottom:, :left], (B, C, bottom, left), flip_dims=[2, 3])
+
+        if right > 0 and bottom > 0:
+            padded_tile[:, :, -bottom:, -right:] = smooth_blend(tile[:, :, -bottom:, -right:], (B, C, bottom, right), flip_dims=[2, 3])
+
+        return padded_tile
+            
+    def hp_applyPadding(self, tile, padding, strategy, pos_x, pos_y, num_tiles_x, num_tiles_y):
         """Applies padding between tiles and scales tiles down if necessary."""
         if padding > 0:
             # Calculate padding for each side based on position
@@ -306,7 +366,10 @@ class Padded_Tiling_Service():
             # Apply padding to the tile using the specified strategy
             if strategy in ["circular", "reflect", "replicate"]:
                 return F.pad(tile, pad, mode=strategy)
-            return F.pad(tile, pad, mode="constant", value=0)
+            elif strategy == "organic_padding":
+                return self.applyOrganicPadding(tile, pad)
+            else:
+                return F.pad(tile, pad, mode="constant", value=0)
         
         return tile
 
@@ -323,7 +386,7 @@ class Padded_Tiling_Service():
         mask *= fade_x * fade_y  # Smooth blending
         return mask
     
-    def hp_applyHPStrategy(self, latent, tile, x, y, B, C, tile_w, tile_h, num_tiles_x, num_tiles_y, padding, padding_strategy, seed, disable_noise):
+    def hp_applyHPStrategy(self, latent, tile, x, y, B, C, num_tiles_x, num_tiles_y, padding, padding_strategy, seed, disable_noise):
         tile = self.hp_applyPadding(tile, padding, padding_strategy, x, y, num_tiles_x, num_tiles_y)
         
         # Get final padded dimensions
@@ -331,20 +394,8 @@ class Padded_Tiling_Service():
         padded_w = tile.shape[-1]
         
         noise = self.generaterandNoise_forPaddStrg(latent, tile, seed, B, C, padded_w, padded_h, disable_noise)
-        mask = self.hp_createMask(latent, B, padded_h, padded_w)  # Pass the correct padded size
+        mask = self.hp_createMask(latent, B, padded_h, padded_w)
         
-        return (tile, noise, mask)
-        
-    def smax_applyPadding(self, tile, padding, strategy):
-        pass
-
-    def smax_createMask(self, latent, batch_size, tile_h, tile_w):
-        pass
-
-    def smax_applySMAXStrategy(self, latent, tile, B, C, tile_w, tile_h, padding, padding_strategy, seed, disable_noise):
-        tile = self.smax_applyPadding(tile, padding, padding_strategy)
-        noise = self.generaterandNoise_forPaddStrg(latent, tile, seed, B, C, tile_w, tile_h, disable_noise)
-        mask = self.smax_createMask(latent, B, tile_h, tile_w)
         return (tile, noise, mask)
 
     
@@ -375,7 +426,7 @@ class LatentTiler:
                 "tile_height": ("INT", {"default": 64, "min": 1}),
                 "tile_width": ("INT", {"default": 64, "min": 1}),
                 "tiling_strategy": (["padded", "random", "random_strict", "simple"],),
-                "padding_strategy": (["circular", "reflect", "replicate", "zero"],),
+                "padding_strategy": (["circular", "reflect", "replicate","random_padded", "organic_padding", "zero"],),
                 "padding_blending": (["hard_padding", "softmax_padding"],),
                 "padding": ("INT", {"default": 16, "min": 0, "max": 128}),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
@@ -402,11 +453,11 @@ class LatentTiler:
 
         return (tile_height, tile_width, padding)
     
-    def applyTilePaddedtrategy(self, latent, tile, x, y, B, C, tile_w, tile_h, num_tiles_x, num_tiles_y, tiling_strategy, padding_strategy, padding_blending, padding, seed, disable_noise):
+    def applyTilePaddedtrategy(self, latent, tile, x, y, B, C, num_tiles_x, num_tiles_y, tiling_strategy, padding_strategy, padding_blending, padding, seed, disable_noise):
         if tiling_strategy == "padded" and padding_blending == "hard_padding":                                                              
-            return self.tilingService.pts_Service.hp_applyHPStrategy(latent, tile, x, y, B, C, tile_w, tile_h, num_tiles_x, num_tiles_y, padding, padding_strategy, seed, disable_noise)
+            return self.tilingService.pts_Service.hp_applyHPStrategy(latent, tile, x, y, B, C, num_tiles_x, num_tiles_y, padding, padding_strategy, seed, disable_noise)
         elif tiling_strategy == "padded" and padding_blending == "softmax_padding":
-            return self.tilingService.pts_Service.smax_applySMAXStrategy(latent, tile, x, y, B, C, tile_w, tile_h, num_tiles_x, num_tiles_y, padding, padding_strategy, seed, disable_noise)
+            return self.tilingService.pts_Service.smax_applySMAXStrategy(latent, tile, x, y, B, C, num_tiles_x, num_tiles_y, padding, padding_strategy, seed, disable_noise)
     
     def tileLatent(self, latent, positive, negative, tile_height, tile_width, tiling_strategy, padding_strategy, padding_blending, padding, seed, disable_noise):
         samples = latent["samples"]
@@ -460,9 +511,7 @@ class LatentTiler:
                         x, 
                         y, 
                         B, 
-                        C, 
-                        tile_w, 
-                        tile_h, 
+                        C,
                         num_tiles_x,
                         num_tiles_y, 
                         tiling_strategy, 
@@ -506,6 +555,9 @@ class LatentTiler:
 
         return (tiles, tile_positions, noise_tiles, denoise_masks, blending_masks, modified_positives, modified_negatives, (B, C, H, W))
 
+import torch
+import torch.nn.functional as F
+
 class LatentMerger:
     def __init__(self):
         self.tensorService = TensorService()
@@ -518,28 +570,13 @@ class LatentMerger:
                 "blending_mask": ("LIST",),
                 "tile_positions": ("LIST",),
                 "original_size": ("TUPLE",),
-                "padding": ("INT", {"default": 16, "min": 0, "max": 128}),
             }
         }
 
     RETURN_TYPES = ("LATENT",)
-    FUNCTION = "merge_tiles"
+    FUNCTION = "mergeTiles"
 
-    def getLatentSize(self, imageSize: int) -> int:
-        return basic_utils.getLatentSize(imageSize)
-    
-    def getValid_regionAfterPadding(self, tileSize, padding, orig_latent_size, tile_pos) -> int:
-        return min(tileSize - 2 * padding, orig_latent_size - tile_pos)
-
-    def get_valid_tile(self, tile, start_h, end_h, start_w, end_w):
-        """Extracts a valid tile slice based on given start and end indices."""
-        return tile[:, :, start_h:end_h, start_w:end_w]
-
-    def get_valid_mask(self, mask, start_h, end_h, start_w, end_w):
-        """Extracts a valid mask slice based on given start and end indices."""
-        return mask[:, :, start_h:end_h, start_w:end_w]
-
-    def merge_tiles(self, tiles, blending_masks, tile_positions, original_size, padding):
+    def mergeTiles(self, tiles, blending_masks, tile_positions, original_size, blend_strength=0.03):
         device = comfy.model_management.get_torch_device()
         B, C, H, W = original_size
 
@@ -547,34 +584,70 @@ class LatentMerger:
         weight_map = torch.zeros((B, C, H, W), device=device)
 
         print(f"[DEBUG] Original Latent Size: {original_size}")
-        
+
         for i, (tile_dict, mask_dict, (x, y)) in enumerate(zip(tiles, blending_masks, tile_positions)):
             tile = tile_dict["samples"].to(device)
             mask = mask_dict["blending_mask"].to(device)
+            valid_tile, valid_mask = self.extractValidRegion(tile, mask, H, W, x, y, blend_strength)
+            self.applyTiletoMerged(merged_samples, weight_map, valid_tile, valid_mask, x, y)
 
-            if mask.shape[1] == 1 and tile.shape[1] > 1:
-                mask = mask.expand(-1, tile.shape[1], -1, -1)
-
-            valid_h = min(tile.shape[2], H - y)
-            valid_w = min(tile.shape[3], W - x)
-
-            valid_tile = tile[:, :, :valid_h, :valid_w]
-            valid_mask = mask[:, :, :valid_h, :valid_w]
-
-            print(f"[DEBUG] Tile {i} at (x={x}, y={y}): Shape {tile.shape} -> Valid: {valid_h}x{valid_w}")
-            print(f"[DEBUG] Mask {i} Shape: {mask.shape}")
-
-            merged_samples[:, :, y:y + valid_h, x:x + valid_w] += valid_tile * valid_mask
-            weight_map[:, :, y:y + valid_h, x:x + valid_w] += valid_mask
-
-        merged_samples /= torch.clamp(weight_map, min=1e-6)
-
+        merged_samples = self.normalizeOutput(merged_samples, weight_map)
+        merged_samples = self.applyEdgeRefinement(merged_samples, tile_positions, blend_strength)
+        
         print(f"[DEBUG] Merged Output Shape: {merged_samples.shape}")
-
         return ({"samples": merged_samples},)
 
+    # --- General Code ---
+    def extractValidRegion(self, tile, mask, H, W, x, y, blend_strength):
+        valid_h = min(tile.shape[2], H - y)
+        valid_w = min(tile.shape[3], W - x)
+        valid_tile = tile[:, :, :valid_h, :valid_w]
+        valid_mask = mask[:, :, :valid_h, :valid_w] * blend_strength  # Apply blend strength
+        return valid_tile, valid_mask
 
+    def applyTiletoMerged(self, merged_samples, weight_map, tile, mask, x, y):
+        merged_samples[:, :, y:y + tile.shape[2], x:x + tile.shape[3]] += tile * mask
+        weight_map[:, :, y:y + tile.shape[2], x:x + tile.shape[3]] += mask
 
+    def normalizeOutput(self, merged_samples, weight_map):
+        weight_map = torch.clamp(weight_map, min=1e-6)  # Prevent division by zero
+        return merged_samples / weight_map
+
+    # --- Strategy-Specific Code ---
+    def applyEdgeRefinement(self, merged_samples, tile_positions, blend_strength):
+        blend_width = 1
+        B, C, H, W = merged_samples.shape
+
+        for b in range(B):
+            for c in range(C):
+                for x, y in tile_positions:
+                    merged_samples = self.refineEdges(merged_samples, b, c, x, y, blend_strength, blend_width)
+
+                merged_samples[b, c, 0, :] = torch.lerp(merged_samples[b, c, 0, :], merged_samples[b, c, 1, :], 0.1 * blend_strength)
+                merged_samples[b, c, :, 0] = torch.lerp(merged_samples[b, c, :, 0], merged_samples[b, c, :, 1], 0.1 * blend_strength)
+
+        return merged_samples
+
+    def refineEdges(self, merged_samples, b, c, x, y, blend_strength, blend_width):
+        if x > 0:
+            edge_diff_x = torch.abs(merged_samples[b, c, :, x] - merged_samples[b, c, :, x-1])
+            adaptive_blend_x = torch.clamp(1.0 - edge_diff_x.mean(), 0.02, 0.08) * blend_strength
+            merged_samples[b, c, :, x-blend_width:x+blend_width] = torch.lerp(
+                merged_samples[b, c, :, x-blend_width:x+blend_width],
+                merged_samples[b, c, :, x-1:x+1],
+                adaptive_blend_x
+            )
+        
+        if y > 0:
+            edge_diff_y = torch.abs(merged_samples[b, c, y, :] - merged_samples[b, c, y-1, :])
+            adaptive_blend_y = torch.clamp(1.0 - edge_diff_y.mean(), 0.02, 0.08) * blend_strength
+            merged_samples[b, c, y-blend_width:y+blend_width, :] = torch.lerp(
+                merged_samples[b, c, y-blend_width:y+blend_width, :],
+                merged_samples[b, c, y-1:y+1, :],
+                adaptive_blend_y
+            )
+        return merged_samples
+        
 class TKS_Base:
     def common_ksampler(
             self,
@@ -685,7 +758,7 @@ class TKS_Base:
 
         # Step 4: Merge Tiles
         merger = LatentMerger()
-        merged_latent = merger.merge_tiles(processed_tiles, blending_masks, tile_positions, original_size, padding)[0]
+        merged_latent = merger.mergeTiles(processed_tiles, blending_masks, tile_positions, original_size, blend_strength=0.3)[0]
 
         return (merged_latent,)
 
@@ -707,7 +780,7 @@ class Tiled_KSampler (TKS_Base):
                 "tile_width": ("INT", {"default": 64, "min": 1}),
                 "tile_height": ("INT", {"default": 64, "min": 1}),
                 "tiling_strategy": (["padded", "random", "random_strict", "simple"],),
-                "padding_strategy": (["circular", "reflect", "replicate", "zero"],),
+                "padding_strategy": (["circular", "reflect", "replicate", "random_padded", "organic_padding", "zero"],),
                 "padding_blending": (["hard_padding", "softmax_padding"],),
                 "padding": ("INT", {"default": 16, "min": 0, "max": 128}),
             }
