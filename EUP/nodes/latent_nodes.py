@@ -333,43 +333,43 @@ class Padded_Tiling_Service():
             blend_factor = torch.tensor(blend_factor, device=tile.device).expand_as(patch)
 
             # Perlin-style noise (natural variation, no harsh edges)
-            noise = (torch.rand_like(patch) - 0.5) * 0.08  # Less aggressive randomness
-            blend_factor = torch.clamp(blend_factor + noise, 0.3, 0.85)  # Adaptive range
+            noise = (torch.rand_like(patch) - 0.5) * 1.5  # Random noise in [-0.5, 0.5]
+            blend_factor = torch.clamp(blend_factor + noise, 0.4, 0.5)  # Adaptive range
 
             return (patch * blend_factor + mirrored * (1 - blend_factor)).expand(expand_shape)
 
         # Left padding (soft blended from left edge)
         if left > 0:
-            left_patch = soft_blend(tile[:, :, :, :left], (B, C, H, left), flip_dims=[3], blend_factor=0.75)
+            left_patch = soft_blend(tile[:, :, :, :left], (B, C, H, left), flip_dims=[3], blend_factor=0.55)
             padded_tile[:, :, top:top + H, :left] = left_patch
 
         # Right padding
         if right > 0:
-            right_patch = soft_blend(tile[:, :, :, -right:], (B, C, H, right), flip_dims=[3], blend_factor=0.75)
+            right_patch = soft_blend(tile[:, :, :, -right:], (B, C, H, right), flip_dims=[3], blend_factor=0.55)
             padded_tile[:, :, top:top + H, -right:] = right_patch
 
         # Top padding
         if top > 0:
-            top_patch = soft_blend(tile[:, :, :top, :], (B, C, top, W), flip_dims=[2], blend_factor=0.75)
+            top_patch = soft_blend(tile[:, :, :top, :], (B, C, top, W), flip_dims=[2], blend_factor=0.55)
             padded_tile[:, :, :top, left:left + W] = top_patch
 
         # Bottom padding
         if bottom > 0:
-            bottom_patch = soft_blend(tile[:, :, -bottom:, :], (B, C, bottom, W), flip_dims=[2], blend_factor=0.75)
+            bottom_patch = soft_blend(tile[:, :, -bottom:, :], (B, C, bottom, W), flip_dims=[2], blend_factor=0.55)
             padded_tile[:, :, -bottom:, left:left + W] = bottom_patch
 
         # Corner regions (blend both X and Y for smooth edges)
         if left > 0 and top > 0:
-            padded_tile[:, :, :top, :left] = soft_blend(tile[:, :, :top, :left], (B, C, top, left), flip_dims=[2, 3], blend_factor=0.65)
+            padded_tile[:, :, :top, :left] = soft_blend(tile[:, :, :top, :left], (B, C, top, left), flip_dims=[2, 3], blend_factor=0.35)
 
         if right > 0 and top > 0:
-            padded_tile[:, :, :top, -right:] = soft_blend(tile[:, :, :top, -right:], (B, C, top, right), flip_dims=[2, 3], blend_factor=0.65)
+            padded_tile[:, :, :top, -right:] = soft_blend(tile[:, :, :top, -right:], (B, C, top, right), flip_dims=[2, 3], blend_factor=0.35)
 
         if left > 0 and bottom > 0:
-            padded_tile[:, :, -bottom:, :left] = soft_blend(tile[:, :, -bottom:, :left], (B, C, bottom, left), flip_dims=[2, 3], blend_factor=0.65)
+            padded_tile[:, :, -bottom:, :left] = soft_blend(tile[:, :, -bottom:, :left], (B, C, bottom, left), flip_dims=[2, 3], blend_factor=0.35)
 
         if right > 0 and bottom > 0:
-            padded_tile[:, :, -bottom:, -right:] = soft_blend(tile[:, :, -bottom:, -right:], (B, C, bottom, right), flip_dims=[2, 3], blend_factor=0.65)
+            padded_tile[:, :, -bottom:, -right:] = soft_blend(tile[:, :, -bottom:, -right:], (B, C, bottom, right), flip_dims=[2, 3], blend_factor=0.35)
 
         return padded_tile
             
