@@ -243,6 +243,9 @@ class TensorService():
 
 class Tiling_Strategy_Base():
 
+    def __init__(self):
+        self.tensorService = TensorService()
+
     def createMask(self, batch_size, tile_h, tile_w,):
             """Creates a smooth blending mask for latent tiles."""
             
@@ -274,18 +277,31 @@ class Tiling_Strategy_Base():
             
             return mask
     
-    def generateRandomNoise(self, latent, tile, seed, B, C, tile_w, tile_h, disable_noise: bool):
+    def generateRandomNoise(self, latent, seed, disable_noise: bool):
         samples = latent.get("samples")
+        shape = samples.shape
+        B, C, H, W = shape
+        
         if disable_noise:
-            return torch.zeros((B, C, tile_h, tile_w), dtype=samples.dtype, device="cpu")
+            return torch.zeros((B, C, H, W), dtype=samples.dtype, layout=samples.layout, device="cpu")
         else:
             batch_inds = latent.get("batch_index")
-            return comfy.sample.prepare_noise(tile, seed, batch_inds)
+            return comfy.sample.prepare_noise(samples, seed, batch_inds)
+    
+    def getTilesfromTilePos(self, samples, tile_positions):
+        allTiles = []
+        for x, y, tile_w, tile_h in tile_positions:
+            allTiles.append(self.tensorService.getSlice(samples, y, tile_h, x, tile_w))
+        return allTiles
+    
+    def getNoiseTilesfromTilePos(self, noise_tensor , tile_positions):
+        return self.getTilesfromTilePos(noise_tensor, tile_positions)
+    
         
 class Simple_Tiling_Service(Tiling_Strategy_Base):
-
+    
     def __init__(self):
-        self.tensorService = TensorService()
+        super().__init__()
 
     def generatePos_forSimpleStrg(self, latent_width: int, latent_height: int, tile_width: int, tile_height: int) -> List[Tuple[int, int, int, int]]:
         x_positions = list(range(0, latent_width - tile_width + 1, tile_width))
@@ -304,22 +320,18 @@ class Simple_Tiling_Service(Tiling_Strategy_Base):
         return tile_positions
 
     def getTilesforSimpleStrategy(self,samples, tile_positions):
-        allTiles = []
-        for x, y, tile_w, tile_h in tile_positions:
-            allTiles.append(self.tensorService.getSlice(samples, y, tile_h, x, tile_w))
-        return allTiles
+        return self.getTilesfromTilePos(samples, tile_positions)
     
     
-    def applySimpleStrategy(self, latent, tile, seed, B, C, tile_w, tile_h, disable_noise):
-        noise = self.generateRandomNoise(latent, tile, seed, B, C, tile_w, tile_h, disable_noise)
+    def applySimpleStrategy(self, tile, B, tile_w, tile_h,):
         mask = self.createMask(B, tile_h, tile_w)
-        return (tile, noise, mask)
+        return (tile, mask)
     
 class Padded_Tiling_Service(Tiling_Strategy_Base):
-    
-    def __init__(self):
-        self.tensorService = TensorService()
 
+    def __init__(self):
+        super().__init__()
+    
     def generatePos_forPaddStrg(self, latent_width: int, latent_height: int, tile_width: int, tile_height: int, padding: int) -> List[Tuple[int, int, int, int]]:
         x_positions = list(range(0, latent_width - tile_width + 1, tile_width))  # Steps for width
         y_positions = list(range(0, latent_height - tile_height + 1, tile_height))  # Steps for height
@@ -438,27 +450,23 @@ class Padded_Tiling_Service(Tiling_Strategy_Base):
         return tile
     
     def getTilesforPaddedStrategy(self,samples, tile_positions):
-        allTiles = []
-        for x, y, tile_w, tile_h in tile_positions:
-            allTiles.append(self.tensorService.getSlice(samples, y, tile_h, x, tile_w))
-        return allTiles
+        return self.getTilesfromTilePos(samples, tile_positions)
     
-    def applyPaddedStrategy(self, latent, tile, x, y, B, C, num_tiles_x, num_tiles_y, padding, padding_strategy, seed, disable_noise):
+    def applyPaddedStrategy(self, tile, x, y, B, num_tiles_x, num_tiles_y, padding, padding_strategy):
         tile = self.applyPadding(tile, padding, padding_strategy, x, y, num_tiles_x, num_tiles_y)
 
         # Get final padded dimensions
         padded_h = tile.shape[-2]
         padded_w = tile.shape[-1]
         
-        noise = self.generateRandomNoise(latent, tile, seed, B, C, padded_w, padded_h, disable_noise)
         mask = self.createMask(B, padded_h, padded_w)
         
-        return (tile, noise, mask)
+        return (tile, mask)
 
 class Random_Tiling_Service(Tiling_Strategy_Base):
-
     def __init__(self):
-        self.tensorService = TensorService()
+        super().__init__()
+
 
     def generatePos_forRandomStrg(self, latent_width: int, latent_height: int, tile_width: int, tile_height: int, generator: torch.Generator) -> List[Tuple[int, int, int, int]]:
         def calc_coords(latent_size, tile_size, jitter):
@@ -482,21 +490,18 @@ class Random_Tiling_Service(Tiling_Strategy_Base):
         return tile_positions 
     
     def getTilesforRandomStrategy(self,samples, tile_positions):
-        allTiles = []
-        for x, y, tile_w, tile_h in tile_positions:
-            allTiles.append(self.tensorService.getSlice(samples, y, tile_h, x, tile_w))
-        return allTiles
+        return self.getTilesfromTilePos(samples, tile_positions)
     
-    
-    def applyRandomStrategy(self, latent, tile, seed, B, C, tile_w, tile_h, disable_noise):
-        noise = self.generateRandomNoise(latent, tile, seed, B, C, tile_w, tile_h, disable_noise)
+    def applyRandomStrategy(self, tile, B, tile_w, tile_h):
         mask = self.createMask(B, tile_h, tile_w)
-        return (tile, noise, mask)
+        return (tile, mask)
     
-class TilingService():
+class TilingService(Tiling_Strategy_Base):
+
+        
 
     def __init__(self):
-
+        super().__init__()
         # sts - Stands for Simple Tiling Service
         self.sts_Service = Simple_Tiling_Service()
         # rts - Stands for Random Tiling Service
@@ -531,8 +536,12 @@ class LatentTiler:
                 "disable_noise": ("BOOLEAN", {"default": False}),
             }
         }
+    
+    CATEGORY = "EUP - Ultimate Pack/latent"
 
-    RETURN_TYPES = ("LIST", "LIST", "LIST", "LIST", "LIST", "TUPLE")
+    RETURN_TYPES = ("LIST", "LIST", "LIST", "LIST", "LIST", "LIST")
+    RETURN_NAMES = ("tiles", "tile_positions", "noise_tiles", "blending_masks", "positive", "negative")
+
     FUNCTION = "tileLatent"
 
     def getLatentSize(self, image_size: int) -> int:
@@ -568,16 +577,21 @@ class LatentTiler:
 
         print(f"Num tiles (x, y): ({num_tiles_x}, {num_tiles_y})")
 
+        noise = self.tilingService.generateRandomNoise(latent, seed, disable_noise)
+
         if tiling_strategy == "simple":
             tile_positions = self.tilingService.sts_Service.generatePos_forSimpleStrg(W, H, tile_width, tile_height)
             tiled_tiles = self.tilingService.sts_Service.getTilesforSimpleStrategy(samples, tile_positions)
+            tiled_noise_tiles = self.tilingService.getNoiseTilesfromTilePos(noise, tile_positions)
         elif tiling_strategy == "random":
             random_strg_gen = torch.manual_seed(seed)
             tile_positions = self.tilingService.rts_Service.generatePos_forRandomStrg(W, H,tile_width, tile_height, random_strg_gen)
             tiled_tiles = self.tilingService.rts_Service.getTilesforRandomStrategy(samples, tile_positions)
+            tiled_noise_tiles = self.tilingService.getNoiseTilesfromTilePos(noise, tile_positions)
         elif tiling_strategy == "padded":
             tile_positions = self.tilingService.pts_Service.generatePos_forPaddStrg(W, H, tile_width, tile_height, padding)
             tiled_tiles = self.tilingService.pts_Service.getTilesforPaddedStrategy(samples, tile_positions)
+            tiled_noise_tiles = self.tilingService.getNoiseTilesfromTilePos(noise, tile_positions)
 
         tiles, noise_tiles, blending_masks, modified_positives, modified_negatives = [], [], [], [], []
 
@@ -590,21 +604,18 @@ class LatentTiler:
         sptcond_pos, sptcond_neg = self.conditionService.sptcondService.extractSpatialConds(positive, negative, shape, samples.device)
 
         # Process each tile
-        for (x, y, tile_w, tile_h), tile in zip(tile_positions, tiled_tiles):
+        for (x, y, tile_w, tile_h), tile, noise_tile in zip(tile_positions, tiled_tiles, tiled_noise_tiles):
 
             
             if tiling_strategy == "simple":
-                tile, noise_tile, blending_mask = self.tilingService.sts_Service.applySimpleStrategy(
-                    latent, tile, seed, B, C, tile_w, tile_h, disable_noise
-                )
+                tile, blending_mask = self.tilingService.sts_Service.applySimpleStrategy(tile, B, tile_w, tile_h)
             elif tiling_strategy == "random":
-                tile, noise_tile, blending_mask = self.tilingService.rts_Service.applyRandomStrategy(
-                    latent, tile, seed, B, C, tile_w, tile_h, disable_noise
-                )
+                tile, blending_mask = self.tilingService.rts_Service.applyRandomStrategy(tile, B, tile_w, tile_h)
             elif tiling_strategy == "padded":                                                              
-                tile, noise_tile, blending_mask = self.tilingService.pts_Service.applyPaddedStrategy(
-                    latent, tile, x, y, B, C, num_tiles_x, num_tiles_y,padding, padding_strategy, seed, disable_noise
+                tile, blending_mask = self.tilingService.pts_Service.applyPaddedStrategy(
+                    tile, x, y, B, num_tiles_x, num_tiles_y, padding, padding_strategy
                 )
+
 
             # Copy positive and negative lists for modification
             pos = [c.copy() for c in positive]
@@ -631,11 +642,7 @@ class LatentTiler:
             modified_positives.append(pos)
             modified_negatives.append(neg)
 
-        return (tiles, tile_positions, noise_tiles, blending_masks, modified_positives, modified_negatives, (B, C, H, W))
-
-import torch
-import torch.nn.functional as F
-import torchvision.transforms as trsf
+        return (tiles, tile_positions, noise_tiles, blending_masks, modified_positives, modified_negatives)
 
 class LatentMerger:
     def __init__(self):
@@ -653,60 +660,63 @@ class LatentMerger:
             }
         }
 
+    CATEGORY = "EUP - Ultimate Pack/latent"
+
     RETURN_TYPES = ("LATENT",)
+    OUTPUT_TOOLTIPS = ("The merged latent.",)
     FUNCTION = "mergeTiles"
 
-    def mergeTiles(self, tiles, blending_masks, tile_positions, original_size, blending):
+    def mergeTiles(self, tiles, blending_masks, tile_positions, blending):
         device = comfy.model_management.get_torch_device()
 
         # Dynamically calculate output dimensions based on tile positions
         max_width = max(x + w for x, y, w, h in tile_positions)
         max_height = max(y + h for x, y, w, h in tile_positions)
 
-        # Set the new output dimensions based on the max tile positions
-        merged_samples = torch.zeros((1, 4, max_height, max_width), device=device)  # Assuming 1 batch and 4 channels
+        # Ensure merged tensor has 4 channels
+        merged_samples = torch.zeros((1, 4, max_height, max_width), device=device)
         weight_map = torch.zeros_like(merged_samples)
 
-        print(f"[DEBUG] Dynamically Calculated Output Size: {merged_samples.shape}")
 
         for i, (tile_dict, mask_dict, (x, y, w, h)) in enumerate(zip(tiles, blending_masks, tile_positions)):
             tile = tile_dict["samples"].to(device)
+
+            if tile.dim() == 3:
+                tile = tile.unsqueeze(0)
+
+            if tile.shape[1] == 3:
+                tile = torch.cat([tile, torch.zeros((tile.shape[0], 1, tile.shape[2], tile.shape[3]), device=device)], dim=1)
+
             mask = mask_dict["blending_mask"].to(device)
+
+            if mask.dim() == 3:
+                mask = mask.unsqueeze(0)
+
             valid_tile, valid_mask = self.extractValidRegion(tile, mask, max_height, max_width, x, y)
-            self.applyTiletoMerged(merged_samples, weight_map, valid_tile, valid_mask, x, y, w, h)
 
-        # Apply blending based on the selected method
-        if blending == "adaptive":
-            merged_samples = self.applyAdaptiveBlending(merged_samples, tile_positions, weight_map)
-        elif blending == "softmax":
-            merged_samples = self.applySoftMaxBlending(merged_samples, tile_positions, weight_map)
+            merged_samples, weight_map = self.applyTiletoMerged(merged_samples, weight_map, valid_tile, valid_mask, x, y, w, h)
 
+
+        weight_map = torch.clamp(weight_map, min=1e-6)  # Prevent division by zero
+        merged_samples = merged_samples / weight_map
         print(f"[DEBUG] Merged Output Shape (without cropping): {merged_samples.shape}")
-        return ({"samples": merged_samples},)
 
-    def extractValidRegion(self, tile, mask, max_height, max_width, x, y):
-        # Ensure the tile does not exceed the latent space boundaries
-        valid_tile_h = min(tile.shape[2], max_height - y)  # Ensure it fits within height
-        valid_tile_w = min(tile.shape[3], max_width - x)   # Ensure it fits within width
-
-        valid_mask_h = min(mask.shape[2], max_height - y)
-        valid_mask_w = min(mask.shape[3], max_width - x)
-
-        # Extract the valid regions
-        valid_tile = tile[:, :, :valid_tile_h, :valid_tile_w]
-        valid_mask = mask[:, :, :valid_mask_h, :valid_mask_w]
-
-        return valid_tile, valid_mask
+        return merged_samples
 
     def applyTiletoMerged(self, merged_samples, weight_map, tile, mask, x, y, w, h):
         # Ensure that the tile and mask dimensions fit within the target region
         tile_h, tile_w = tile.shape[2], tile.shape[3]
         mask_h, mask_w = mask.shape[2], mask.shape[3]
 
-        valid_tile_h = min(tile_h, h)  # Ensure we don't exceed the height of the latent space
-        valid_tile_w = min(tile_w, w)  # Ensure we don't exceed the width of the latent space
+        # Clip the tile sizes to the target region and ensure they are non-zero
+        valid_tile_h = min(tile_h, h)
+        valid_tile_w = min(tile_w, w)
         valid_mask_h = min(mask_h, h)
         valid_mask_w = min(mask_w, w)
+
+        # Ensure valid_tile_h and valid_tile_w are not zero
+        if valid_tile_h == 0 or valid_tile_w == 0:
+            raise ValueError(f"Invalid tile dimensions: valid_tile_h = {valid_tile_h}, valid_tile_w = {valid_tile_w}")
 
         # Ensure merged_samples and weight_map are 4D
         if merged_samples.dim() == 2:
@@ -714,100 +724,36 @@ class LatentMerger:
         if weight_map.dim() == 2:
             weight_map = weight_map.unsqueeze(0).unsqueeze(0)
 
-        # Make sure batch and channel dimensions match the tile
-        B, C, _, _ = tile.shape
-        if merged_samples.shape[0] != B or merged_samples.shape[1] != C:
-            merged_samples = merged_samples.expand(B, C, -1, -1).clone()
-        if weight_map.shape[0] != B or weight_map.shape[1] != C:
-            weight_map = weight_map.expand(B, C, -1, -1).clone()
-
         # Perform blending
         merged_samples[:, :, y:y + valid_tile_h, x:x + valid_tile_w] += (
             tile[:, :, :valid_tile_h, :valid_tile_w] * mask[:, :, :valid_mask_h, :valid_mask_w]
         )
         weight_map[:, :, y:y + valid_tile_h, x:x + valid_tile_w] += mask[:, :, :valid_mask_h, :valid_mask_w]
 
-    def applyAdaptiveBlending(self, merged_samples, tile_positions, weight_map):
-        blend_strength = 0.1 
-        blend_width = 1
-        B, C, H, W = merged_samples.shape
+        return merged_samples, weight_map
 
-        # Soft Blending normalization before applying the blending
-        weight_map = torch.clamp(weight_map, min=1e-6)  # Prevent division by zero
-        merged_samples = merged_samples / weight_map
+    def extractValidRegion(self, tile, mask, max_height, max_width, x, y):
+        # Calculate valid regions ensuring the height and width are positive
+        valid_tile_h = min(tile.shape[2], max_height - y)
+        valid_tile_w = min(tile.shape[3], max_width - x)
+        valid_mask_h = min(mask.shape[2], max_height - y)
+        valid_mask_w = min(mask.shape[3], max_width - x)
 
-        for b in range(B):
-            for c in range(C):
-                for x, y, w, h in tile_positions:
-                    padded_x_start = x
-                    padded_y_start = y
+        # If the region is invalid (i.e., height or width is zero), raise an error
+        if valid_tile_h == 0 or valid_tile_w == 0:
+            raise ValueError(f"Invalid tile dimensions: valid_tile_h = {valid_tile_h}, valid_tile_w = {valid_tile_w}")
 
-                    if padded_x_start > 0:
-                        edge_diff_x = torch.abs(merged_samples[b, c, :, padded_x_start] - merged_samples[b, c, :, padded_x_start-1])
-                        adaptive_blend_x = torch.clamp(1.0 - edge_diff_x.mean(), 0.02, 0.08) * blend_strength
-                        merged_samples[b, c, :, padded_x_start-blend_width:padded_x_start+blend_width] = torch.lerp(
-                            merged_samples[b, c, :, padded_x_start-blend_width:padded_x_start+blend_width],
-                            merged_samples[b, c, :, padded_x_start-1:padded_x_start+1],
-                            adaptive_blend_x
-                        )
+        valid_tile = tile[:, :, :valid_tile_h, :valid_tile_w]
+        valid_mask = mask[:, :, :valid_mask_h, :valid_mask_w]
 
-                    if padded_y_start > 0:
-                        edge_diff_y = torch.abs(merged_samples[b, c, padded_y_start, :] - merged_samples[b, c, padded_y_start-1, :])
-                        adaptive_blend_y = torch.clamp(1.0 - edge_diff_y.mean(), 0.02, 0.08) * blend_strength
-                        merged_samples[b, c, padded_y_start-blend_width:padded_y_start+blend_width, :] = torch.lerp(
-                            merged_samples[b, c, padded_y_start-blend_width:padded_y_start+blend_width, :],
-                            merged_samples[b, c, padded_y_start-1:padded_y_start+1, :],
-                            adaptive_blend_y
-                        )
+        return valid_tile, valid_mask
 
-        return merged_samples
-
-    def applySoftMaxBlending(self, normalized_samples, tile_positions, weight_map):
-        B, C, H, W = normalized_samples.shape  # Extract shape info
-
-        # Debugging: Log initial normalized samples shape
-        print(f"[DEBUG] Initial shape of normalized_samples: {normalized_samples.shape}")
-
-        # Step 1: Normalize weight_map before applying blending
-        weight_map = torch.clamp(weight_map, min=1e-6)  # Prevent division by zero
-        normalized_samples = normalized_samples / weight_map
-
-        # Step 2: Compute edge differences (like Soft Blending)
-        edge_diff_x = torch.abs(normalized_samples[:, :, :, 1:] - normalized_samples[:, :, :, :-1])
-        edge_diff_y = torch.abs(normalized_samples[:, :, 1:, :] - normalized_samples[:, :, :-1, :])
-
-        # Padding edge_diff to handle boundaries
-        pad_x = torch.zeros((B, C, H, 1), device=normalized_samples.device)
-        pad_y = torch.zeros((B, C, 1, W), device=normalized_samples.device)
-        edge_diff_x = torch.cat((edge_diff_x, pad_x), dim=3)
-        edge_diff_y = torch.cat((edge_diff_y, pad_y), dim=2)
-
-        # Step 3: Combine edge differences and normalize
-        edge_diff = edge_diff_x + edge_diff_y  # Combine horizontal and vertical differences
-        edge_diff = edge_diff / (edge_diff.max() + 1e-6)  # Normalize edge differences
-
-        # Step 4: Apply softmax normalization over edge differences (global)
-        softmax_weights = torch.softmax(edge_diff.view(B, C, -1), dim=-1)  # Apply softmax over the flattened edges
-        softmax_weights = softmax_weights.view(B, C, H, W)  # Reshape back to original dimensions
-
-        # Step 5: Blend the samples using softmax weights
-        for b in range(B):
-            for c in range(C):
-                for x, y, w, h in tile_positions:
-                    # Apply softmax-based blending to the current tile
-                    normalized_samples[b, c, :, :] = torch.lerp(
-                        normalized_samples[b, c, :, :], 
-                        normalized_samples[b, c, :, :].mean(),
-                        softmax_weights[b, c, :, :]
-                    )
-
-        # Return the blended result
-        return normalized_samples
             
 class TKS_Base:
     def common_ksampler(
             self,
-            model, 
+            model,
+            add_noise, 
             seed, 
             steps, 
             cfg, 
@@ -822,17 +768,16 @@ class TKS_Base:
             padding_strategy,
             blending,
             padding, 
+            return_with_leftover_noise,
             denoise=1.0,
             disable_noise=False, 
             start_step=None, 
             last_step=None, 
             force_full_denoise=False
         ):
-        
+
         device = comfy.model_management.get_torch_device()
         
-        latent_image = latent["samples"]
-        latent_image = comfy.sample.fix_empty_latent_channels(model, latent_image)
 
         noise_mask = None
         if "noise_mask" in latent:
@@ -840,7 +785,7 @@ class TKS_Base:
         
         # Step 2: Tile Latent **and Noise**
         tiler = LatentTiler()
-        tiles, tile_positions, noise_tiles, blending_masks, modified_positives, modified_negatives, original_size = tiler.tileLatent(
+        tiles, tile_positions, noise_tiles, blending_masks, modified_positives, modified_negatives = tiler.tileLatent(
             latent=latent,
             positive=positive, 
             negative=negative,
@@ -858,6 +803,8 @@ class TKS_Base:
         disable_pbar = not comfy.utils.PROGRESS_BAR_ENABLED
         if not disable_pbar:
             previewer = latent_preview.get_previewer(device, model.model.latent_format)
+
+        sampler = comfy.samplers.KSampler(model, steps=steps, device=device, sampler=sampler_name, scheduler=scheduler, denoise=denoise, model_options=model.model_options)
 
         processed_tiles = []
         total_steps = steps * len(tiles)
@@ -889,7 +836,7 @@ class TKS_Base:
                 noise_mask = None
                 if "noise_mask" in tile:
                     noise_mask = tile["samples"]
-
+                
                 processed_tile = comfy.sample.sample(
                     model=model, 
                     noise=noise_tile["noise_tile"], 
@@ -914,9 +861,11 @@ class TKS_Base:
 
         # Step 4: Merge Tiles
         merger = LatentMerger()
-        merged_latent = merger.mergeTiles(processed_tiles, blending_masks, tile_positions, original_size, blending)[0]
+        merged_latent = merger.mergeTiles(processed_tiles, blending_masks, tile_positions, blending)
 
-        return (merged_latent,)
+        out = latent.copy()
+        out["samples"] = merged_latent
+        return (out, )
 
 class Tiled_KSampler (TKS_Base):
     @classmethod
@@ -946,7 +895,7 @@ class Tiled_KSampler (TKS_Base):
     OUTPUT_TOOLTIPS = ("The denoised latent.",)
     FUNCTION = "sample"
 
-    CATEGORY = "sampling"
+    CATEGORY = "EUP - Ultimate Pack/sampling"
     DESCRIPTION = "Uses the provided model, positive and negative conditioning to denoise the latent image."
 
     def sample(self, 
@@ -965,10 +914,95 @@ class Tiled_KSampler (TKS_Base):
                padding_strategy, 
                padding,
                blending, 
-               denoise=1.0
+               denoise=1.0,
+               disable_noise=False,
         ):
+
+        steps_total = int(steps / denoise)
         return self.common_ksampler(
             model=model, 
+            add_noise=False,
+            seed=seed, 
+            steps=steps_total, 
+            cfg=cfg, 
+            sampler_name=sampler_name, 
+            scheduler=scheduler, 
+            positive=positive, 
+            negative=negative, 
+            latent=latent_image,  
+            tile_width=tile_width,
+            tile_height=tile_height,
+            tiling_strategy=tiling_strategy,  
+            padding_strategy=padding_strategy,
+            padding=padding,
+            return_with_leftover_noise=False,
+            blending=blending,
+            denoise=denoise,
+            disable_noise=disable_noise,
+            start_step=steps_total-steps,
+            last_step=steps_total,
+        )
+
+class Tiled_KSamplerAdvanced (TKS_Base):
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "model": ("MODEL", {"tooltip": "The model used for denoising the input latent."}),
+                "add_noise": (["enable", "disable"], ),
+                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff, "tooltip": "The random seed used for creating the noise."}),
+                "steps": ("INT", {"default": 20, "min": 1, "max": 10000, "tooltip": "The number of steps used in the denoising process."}),
+                "cfg": ("FLOAT", {"default": 8.0, "min": 0.0, "max": 100.0, "step":0.1, "round": 0.01, "tooltip": "The Classifier-Free Guidance scale balances creativity and adherence to the prompt. Higher values result in images more closely matching the prompt however too high values will negatively impact quality."}),
+                "sampler_name": (comfy.samplers.KSampler.SAMPLERS, {"tooltip": "The algorithm used when sampling, this can affect the quality, speed, and style of the generated output."}),
+                "scheduler": (comfy.samplers.KSampler.SCHEDULERS, {"tooltip": "The scheduler controls how noise is gradually removed to form the image."}),
+                "positive": ("CONDITIONING", {"tooltip": "The conditioning describing the attributes you want to include in the image."}),
+                "negative": ("CONDITIONING", {"tooltip": "The conditioning describing the attributes you want to exclude from the image."}),
+                "latent_image": ("LATENT", {"tooltip": "The latent image to denoise."}),
+                "denoise": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "The amount of denoising applied, lower values will maintain the structure of the initial image allowing for image to image sampling."}),
+                "start_at_step": ("INT", {"default": 0, "min": 0, "max": 10000}),
+                "end_at_step": ("INT", {"default": 10000, "min": 0, "max": 10000}),
+                "return_with_leftover_noise": (["disable", "enable"], ),
+                "tile_width": ("INT", {"default": 64, "min": 1}),
+                "tile_height": ("INT", {"default": 64, "min": 1}),
+                "tiling_strategy": (["simple", "random", "padded"],),
+                "padding_strategy": (["organic", "circular", "reflect", "replicate", "zero"],),
+                "padding": ("INT", {"default": 16, "min": 0, "max": 128}),
+                "blending": (["adaptive", "softmax"],),
+            }
+        }
+
+    RETURN_TYPES = ("LATENT",)
+    OUTPUT_TOOLTIPS = ("The denoised latent.",)
+    FUNCTION = "sample"
+
+    CATEGORY = "EUP - Ultimate Pack/sampling"
+    DESCRIPTION = "Uses the provided model, positive and negative conditioning to denoise the latent image."
+
+    def sample(self, 
+               model,
+               add_noise,
+               seed, 
+               steps, 
+               cfg, 
+               sampler_name, 
+               scheduler, 
+               positive, 
+               negative, 
+               latent_image, 
+               tile_width, 
+               tile_height, 
+               tiling_strategy, 
+               padding_strategy, 
+               padding,
+               blending,
+               start_at_step,
+               last_step,
+               return_with_leftover_noise,
+               denoise=1.0,
+        ):
+        return self.common_ksampler(
+            model=model,
+            add_noise=add_noise,
             seed=seed, 
             steps=steps, 
             cfg=cfg, 
@@ -983,94 +1017,16 @@ class Tiled_KSampler (TKS_Base):
             padding_strategy=padding_strategy,
             padding=padding,
             blending=blending,
+            start_at_step=start_at_step,
+            last_step=last_step,
+            return_with_leftover_noise=return_with_leftover_noise,
             denoise=denoise,
         )
-
-class LatentPipeline:
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "model": ("MODEL", {"tooltip": "The model used for denoising the input latent."}),
-                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff, "tooltip": "The random seed used for creating the noise."}),
-                "steps": ("INT", {"default": 20, "min": 1, "max": 10000, "tooltip": "The number of steps used in the denoising process."}),
-                "cfg": ("FLOAT", {"default": 8.0, "min": 0.0, "max": 100.0, "step":0.1, "round": 0.01, "tooltip": "The Classifier-Free Guidance scale balances creativity and adherence to the prompt. Higher values result in images more closely matching the prompt however too high values will negatively impact quality."}),
-                "sampler_name": (comfy.samplers.KSampler.SAMPLERS, {"tooltip": "The algorithm used when sampling, this can affect the quality, speed, and style of the generated output."}),
-                "scheduler": (comfy.samplers.KSampler.SCHEDULERS, {"tooltip": "The scheduler controls how noise is gradually removed to form the image."}),
-                "positive": ("CONDITIONING", {"tooltip": "The conditioning describing the attributes you want to include in the image."}),
-                "negative": ("CONDITIONING", {"tooltip": "The conditioning describing the attributes you want to exclude from the image."}),
-                "latent_image": ("LATENT", {"tooltip": "The latent image to denoise."}),
-                "denoise": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "The amount of denoising applied, lower values will maintain the structure of the initial image allowing for image to image sampling."}),
-                "tile_width": ("INT", {"default": 64, "min": 1}),
-                "tile_height": ("INT", {"default": 64, "min": 1}),
-                "padding": ("INT", {"default": 16, "min": 0, "max": 128}),
-                "padding_strategy": (["circular", "reflect", "replicate", "zero"],),
-                "blending": (["soft", "softmax"],),
-                "scale_factor": ("FLOAT",
-                    {
-                        "default": 1.5,
-                        "min": 1.0,
-                        "max": 2.0,
-                        "step": 0.01,
-                        "display": "number",
-                    },),
-                "upscale_version": (["SDXL", "SD 1.x"],),
-            }
-        }
-
-    RETURN_TYPES = ("LATENT",)
-    FUNCTION = "process_latent"
-
-    def process_latent(
-            self, 
-            model,
-            seed,
-            steps,
-            cfg,
-            sampler_name,
-            scheduler,
-            positive,
-            negative,
-            latent_image,
-            tile_width,
-            tile_height,
-            padding,
-            padding_strategy,
-            denoise,
-            scale_factor, 
-            upscale_version,
-        ):
-
-        # Step 1: Upscale Latent
-        upscaler = LatentUpscaler()
-        upscaled_latent = upscaler.upscale_latent(latent_image, scale_factor,upscale_version)[0]
-        print("SampleSize after Scaling",upscaled_latent["samples"][0].shape)
-
-        # Step 2: Merge Tiles
-        tiledKSampler = Tiled_KSampler()
-        merged_latent = tiledKSampler.sample(
-            model=model, 
-            seed=seed, 
-            steps=steps, 
-            cfg=cfg, 
-            sampler_name=sampler_name, 
-            scheduler=scheduler, 
-            positive=positive, 
-            negative=negative, 
-            latent_image=upscaled_latent,  
-            tile_width=tile_width,
-            tile_height=tile_height, 
-            padding=padding, 
-            padding_strategy=padding_strategy,
-            denoise=denoise,
-        )[0]
-
-        return (merged_latent,)
 
 NODE_CLASS_MAPPINGS = {
     "EUP - Latent Upscaler": LatentUpscaler,
     "EUP - Latent Tiler": LatentTiler,
     "EUP - Latent Merger": LatentMerger,
     "EUP - Tiled KSampler" : Tiled_KSampler,
-    "EUP - Latent Pipeline": LatentPipeline,
+    "EUP - Tiled KSamplerAdvanced" : Tiled_KSamplerAdvanced
 }

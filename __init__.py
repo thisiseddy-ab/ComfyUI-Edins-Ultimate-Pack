@@ -22,7 +22,8 @@ _modules_to_import_ = [
     ]
 _nodes_to_import_ = [
 
-    "latent_nodes"
+    "latent",
+    "upscaler",
     ]
 
 NODE_CLASS_MAPPINGS = {
