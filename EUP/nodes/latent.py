@@ -662,14 +662,8 @@ class LatentTiler:
         # Converts Size From Pixel to Latent
         tile_height, tile_width, padding = self.convertPXtoLatentSize(tile_height, tile_width, padding)
 
-        print(f"[Eddy's - Latent Tiler] Original Latent Size: {samples.shape}")
-        print(f"[Eddy's - Latent Tiler] Tile Size: {tile_height}x{tile_width}")
-
-        # Calculate num_tiles_x and num_tiles_y based on latent dimensions and tile size
-        num_tiles_x = (W + tile_width - 1) // tile_width  # Ceiling division for width
-        num_tiles_y = (H + tile_height - 1) // tile_height  # Ceiling division for height
-
-        print(f"Num tiles (x, y): ({num_tiles_x}, {num_tiles_y})")
+        print(f"[EUP - Latent Tiler] Original Latent Size: {samples.shape}")
+        print(f"[EUP - Latent Tiler] Tile Size: {tile_height}x{tile_width}")
 
         noise = self.tilingService.generateRandomNoise(latent, seed, disable_noise)
         noise_mask = self.tilingService.generateNoiseMask(latent, noise)
@@ -709,24 +703,26 @@ class LatentTiler:
             pos = [c.copy() for c in positive]
             neg = [c.copy() for c in negative]
 
-            # Slice cnets, T2Is, gligen, and spatial conditions for the current tile
+            #### Slice cnets, T2Is, gligen, and spatial conditions for the current tile ####
+            ## Slice CNETS ##
             self.conrolNetService.prepareSlicedCnets(pos, neg, cnets, cnet_imgs, y, tile_h, x, tile_w)
+            ## Slice T2Is ##
             self.t2iService.prepareSlicedT2Is(pos, neg, T2Is, T2I_imgs, y, tile_h, x, tile_w)
 
-            # Slice spatial conditions and update pos and neg
+            ## Slice Spatial Conditions  ##
             pos, neg = self.conditionService.sptcondService.prepareSlicedConds(pos, neg, sptcond_pos, sptcond_neg, y, tile_h, x, tile_w)
 
-            # Slice gligen and update pos and neg
+            # Slice GLIGEN ##
             self.gligenService.prepsreSlicedGligen(pos, neg, gligen_pos, gligen_neg, y, tile_h, x, tile_w)
 
             #### Appending Needed Resources ####
             # Append Sliced Tiles
             tiles.append(tile)
-            # Append Tile Positions (now already includes w, h)
+            # Append Noise Tiles
             noise_tiles.append(noise_tile)
-            # Append Sliced Blending Mask
+            # Append Sliced Noise Masks
             noise_masks.append(noise_mask)
-            # Append the modified pos and neg to the lists
+            # Append the modified pos and neg Condtions
             mod_pos.append(pos)
             mod_neg.append(neg)
 
@@ -741,10 +737,8 @@ class LatentMerger:
         return {
             "required": {
                 "tiles": ("LIST",),
-                "blending_mask": ("LIST",),
                 "tile_positions": ("LIST",),
-                "original_size": ("TUPLE",),
-                "blending": (["adaptive", "softmax"],),
+                "noise_masks": ("LIST",),
             }
         }
 
@@ -754,7 +748,7 @@ class LatentMerger:
     OUTPUT_TOOLTIPS = ("The merged latent.",)
     FUNCTION = "mergeTiles"
 
-    def mergeTiles(self, tiles, blending_masks, tile_positions, blending):
+    def mergeTiles(self, tiles, tile_positions, noise_masks):
         device = comfy.model_management.get_torch_device()
 
         # Dynamically calculate output dimensions based on tile positions
@@ -766,7 +760,7 @@ class LatentMerger:
         weight_map = torch.zeros_like(merged_samples)
 
 
-        for i, (tile, mask, (x, y, w, h)) in enumerate(zip(tiles, blending_masks, tile_positions)):
+        for (tile, (x, y, w, h), mask) in zip(tiles, tile_positions, noise_masks):
             tile = tile.to(device)
 
             if tile.dim() == 3:
@@ -785,11 +779,12 @@ class LatentMerger:
             merged_samples, weight_map = self.applyTiletoMerged(merged_samples, weight_map, valid_tile, valid_mask, x, y, w, h)
 
 
-        weight_map = torch.clamp(weight_map, min=1e-6)  # Prevent division by zero
-        merged_samples = merged_samples / weight_map
-        print(f"[DEBUG] Merged Output Shape (without cropping): {merged_samples.shape}")
+        weight_map = torch.clamp(weight_map, min=1e-6)
+        merged_samples = merged_samples / weight_map   
+        
+        print(f"[EUP - Latent Merger] Merged Output Shape : {merged_samples.shape}")
 
-        return merged_samples
+        return ({"samples": merged_samples},)
 
     def applyTiletoMerged(self, merged_samples, weight_map, tile, mask, x, y, w, h):
         # Ensure that the tile and mask dimensions fit within the target region
@@ -834,49 +829,21 @@ class LatentMerger:
         valid_tile = tile[:, :, :valid_tile_h, :valid_tile_w]
         valid_mask = mask[:, :, :valid_mask_h, :valid_mask_w]
 
-        return valid_tile, valid_mask
+        return (valid_tile, valid_mask)
 
             
 class TKS_Base:
-    def common_ksampler(
-            self,
-            model,
-            seed, 
-            steps, 
-            cfg, 
-            sampler_name, 
-            scheduler, 
-            positive, 
-            negative, 
-            latent,  
-            tile_width,
-            tile_height,
-            tiling_strategy,
-            padding_strategy,
-            padding, 
-            denoise=1.0,
-            disable_noise=False, 
-            start_step=None, 
-            last_step=None, 
-            force_full_denoise=False
-        ):
+    def common_ksampler(self, model, seed, steps, cfg, sampler_name, scheduler, positive, negative, latent,  tile_width,tile_height,tiling_strategy,
+                        padding_strategy, padding, denoise=1.0, disable_noise=False, start_step=None, last_step=None, force_full_denoise=False
+                        ):
 
         device = comfy.model_management.get_torch_device()
         
         # Step 2: Tile Latent **and Noise**
         tiler = LatentTiler()
         tiles, tile_positions, noise_tiles, noise_masks, mod_pos, mod_neg = tiler.tileLatent(
-            latent=latent,
-            positive=positive, 
-            negative=negative,
-            tile_width=tile_width,
-            tile_height=tile_height, 
-            tiling_strategy=tiling_strategy,
-            padding_strategy=padding_strategy,
-            padding=padding,
-            seed=seed,
-            steps=steps,
-            disable_noise=disable_noise
+            latent=latent, positive=positive, negative=negative, tile_width=tile_width, tile_height=tile_height, tiling_strategy=tiling_strategy, 
+            padding_strategy=padding_strategy, padding=padding, seed=seed, steps=steps, disable_noise=disable_noise
         )
         
         # Prepare and Progress Bar
@@ -933,10 +900,10 @@ class TKS_Base:
 
         # Step 4: Merge Tiles
         merger = LatentMerger()
-        merged_latent = merger.mergeTiles(processed_tiles, noise_masks, tile_positions, blending)
+        merged_latent = merger.mergeTiles(processed_tiles, tile_positions, noise_masks)
 
         out = latent.copy()
-        out["samples"] = merged_latent
+        out["samples"] = merged_latent[0].get("samples")
         return (out, )
 
 class Tiled_KSampler (TKS_Base):
