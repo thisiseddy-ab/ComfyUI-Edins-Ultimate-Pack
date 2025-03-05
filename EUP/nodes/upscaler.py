@@ -3,7 +3,7 @@ from nodes import MAX_RESOLUTION
 import comfy.samplers
 import comfy.sample
 
-from EUP.utils import upscaler as upscaler_utils
+from EUP.services import upscaler as upscaler_utils
 
 SCHEDULERS = comfy.samplers.KSampler.SCHEDULERS + ['AYS SDXL', 'AYS SD1', 'AYS SVD', 'GITS[coeff=1.2]', 'LTXV[default]']
 
@@ -87,13 +87,12 @@ class PixelTiledKSampleUpscalerProvider:
                     "scheduler": (comfy.samplers.KSampler.SCHEDULERS, ),
                     "positive": ("CONDITIONING", ),
                     "negative": ("CONDITIONING", ),
-                    "denoise": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
                     "tile_width": ("INT", {"default": 512, "min": 320, "max": MAX_RESOLUTION, "step": 64}),
                     "tile_height": ("INT", {"default": 512, "min": 320, "max": MAX_RESOLUTION, "step": 64}),
                     "tiling_strategy": (["simple", "random", "padded"],),
                     "padding_strategy": (["organic", "circular", "reflect", "replicate", "zero"],),
                     "padding": ("INT", {"default": 16, "min": 0, "max": 128}),
-                    "blending": (["adaptive", "softmax"],),
+                    "denoise": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
                         },
                 "optional": {
                         "upscale_model_opt": ("UPSCALE_MODEL", ),
@@ -110,10 +109,10 @@ class PixelTiledKSampleUpscalerProvider:
     CATEGORY = "EUP - Ultimate Pack/Upscale"
 
     def doit(self, scale_method, model, vae, seed, steps, cfg, sampler_name, scheduler, positive, negative, denoise, tile_width, tile_height, tiling_strategy, 
-             padding_strategy, padding, blending, upscale_model_opt=None,pk_hook_opt=None, tile_cnet_opt=None, tile_cnet_strength=1.0, overlap=64):
+             padding_strategy, padding, upscale_model_opt=None,pk_hook_opt=None, tile_cnet_opt=None, tile_cnet_strength=1.0, overlap=64):
         
         upscaler = upscaler_utils.PixelTiledKSampleUpscaler(scale_method, model, vae, seed, steps, cfg, sampler_name, scheduler, positive, negative, denoise,
-                                                      tile_width, tile_height, tiling_strategy, padding_strategy, padding, blending, upscale_model_opt, 
+                                                      tile_width, tile_height, tiling_strategy, padding_strategy, padding, upscale_model_opt, 
                                                       pk_hook_opt, tile_cnet_opt, tile_size=max(tile_width, tile_height), tile_cnet_strength=tile_cnet_strength, 
                                                       overlap=overlap)
         return (upscaler, )
@@ -131,10 +130,10 @@ class PixelTiledKSampleUpscalerProviderPipe:
                     "cfg": ("FLOAT", {"default": 8.0, "min": 0.0, "max": 100.0}),
                     "sampler_name": (comfy.samplers.KSampler.SAMPLERS, ),
                     "scheduler": (comfy.samplers.KSampler.SCHEDULERS, ),
-                    "denoise": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
                     "tile_width": ("INT", {"default": 512, "min": 320, "max": MAX_RESOLUTION, "step": 64}),
                     "tile_height": ("INT", {"default": 512, "min": 320, "max": MAX_RESOLUTION, "step": 64}),
                     "tiling_strategy": (["random", "padded", 'simple'], ),
+                    "denoise": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
                     "basic_pipe": ("BASIC_PIPE",)
                     },
                 "optional": {
@@ -150,12 +149,12 @@ class PixelTiledKSampleUpscalerProviderPipe:
 
     CATEGORY = "EUP - Ultimate Pack/Upscale"
 
-    def doit(self, scale_method, seed, steps, cfg, sampler_name, scheduler, denoise, tile_width, tile_height, tiling_strategy, padding_strategy, padding, blending, 
+    def doit(self, scale_method, seed, steps, cfg, sampler_name, scheduler, denoise, tile_width, tile_height, tiling_strategy, padding_strategy, padding, 
              basic_pipe, upscale_model_opt=None, pk_hook_opt=None, tile_cnet_opt=None, tile_cnet_strength=1.0):
         
         model, _, vae, positive, negative = basic_pipe
         upscaler = upscaler_utils.PixelTiledKSampleUpscaler(scale_method, model, vae, seed, steps, cfg, sampler_name, scheduler, positive, negative, denoise,
-                                                      tile_width, tile_height, tiling_strategy, padding_strategy, padding, blending, upscale_model_opt, pk_hook_opt, tile_cnet_opt,
+                                                      tile_width, tile_height, tiling_strategy, padding_strategy, padding, upscale_model_opt, pk_hook_opt, tile_cnet_opt,
                                                       tile_size=max(tile_width, tile_height), tile_cnet_strength=tile_cnet_strength)
         return (upscaler, )
     

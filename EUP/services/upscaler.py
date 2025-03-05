@@ -129,13 +129,12 @@ def latent_upscale_on_pixel_space_with_model2(samples, scale_method, upscale_mod
 class PixelTiledKSampleUpscaler:
     def __init__(self, scale_method, model, vae, seed, steps, cfg, sampler_name, scheduler, positive, negative,
                  denoise,
-                 tile_width, tile_height, tiling_strategy, padding_strategy, padding, blending,
+                 tile_width, tile_height, tiling_strategy, padding_strategy, padding,
                  upscale_model_opt=None, hook_opt=None, tile_cnet_opt=None, tile_size=512, tile_cnet_strength=1.0, overlap=64):
         self.params = scale_method, model, vae, seed, steps, cfg, sampler_name, scheduler, positive, negative, denoise
         self.vae = vae
         self.tile_params = tile_width, tile_height, tiling_strategy
         self.padding_params = padding_strategy, padding,
-        self.blending = blending,
         self.upscale_model = upscale_model_opt
         self.hook = hook_opt
         self.tile_cnet = tile_cnet_opt
@@ -149,7 +148,6 @@ class PixelTiledKSampleUpscaler:
         scale_method, model, vae, seed, steps, cfg, sampler_name, scheduler, positive, negative, denoise = self.params
         tile_width, tile_height, tiling_strategy = self.tile_params
         padding_strategy, padding = self.padding_params
-        blending = self.blending
 
         if self.tile_cnet is not None:
             image_batch, image_w, image_h, _ = images.shape
@@ -185,7 +183,6 @@ class PixelTiledKSampleUpscaler:
             latent_image=latent,
             padding_strategy=padding_strategy,
             padding=padding,
-            blending=blending,
             denoise=denoise,
             )[0]
 

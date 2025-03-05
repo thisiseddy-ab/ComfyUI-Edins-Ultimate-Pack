@@ -12,8 +12,10 @@ import comfy.samplers
 import comfy.sample
 import comfy.controlnet
 
+from nodes import MAX_RESOLUTION
+
 #### My Lib's #####
-from EUP.utils import basic_utils
+from EUP.services import basic_utils
 
 #### Third Party Lib's #####
 import torch
@@ -920,8 +922,8 @@ class Tiled_KSampler (TKS_Base):
                 "positive": ("CONDITIONING", {"tooltip": "The conditioning describing the attributes you want to include in the image."}),
                 "negative": ("CONDITIONING", {"tooltip": "The conditioning describing the attributes you want to exclude from the image."}),
                 "latent_image": ("LATENT", {"tooltip": "The latent image to denoise."}),
-                "tile_width": ("INT", {"default": 512, "min": 1}),
-                "tile_height": ("INT", {"default": 512, "min": 1}),
+                "tile_width": ("INT", {"default": 512, "min": 320, "max": MAX_RESOLUTION, "step": 64}),
+                "tile_height": ("INT", {"default": 512, "min": 320, "max": MAX_RESOLUTION, "step": 64}),
                 "tiling_strategy": (["simple", "random", "padded"],),
                 "padding_strategy": (["organic", "circular", "reflect", "replicate", "zero"],),
                 "padding": ("INT", {"default": 16, "min": 0, "max": 128}),
@@ -962,8 +964,8 @@ class Tiled_KSamplerAdvanced (TKS_Base):
                 "positive": ("CONDITIONING", {"tooltip": "The conditioning describing the attributes you want to include in the image."}),
                 "negative": ("CONDITIONING", {"tooltip": "The conditioning describing the attributes you want to exclude from the image."}),
                 "latent_image": ("LATENT", {"tooltip": "The latent image to denoise."}),
-                "tile_width": ("INT", {"default": 512, "min": 1}),
-                "tile_height": ("INT", {"default": 512, "min": 1}),
+                "tile_width": ("INT", {"default": 512, "min": 320, "max": MAX_RESOLUTION, "step": 64}),
+                "tile_height": ("INT", {"default": 512, "min": 320, "max": MAX_RESOLUTION, "step": 64}),
                 "tiling_strategy": (["simple", "random", "padded"],),
                 "padding_strategy": (["organic", "circular", "reflect", "replicate", "zero"],),
                 "padding": ("INT", {"default": 16, "min": 0, "max": 128}),
