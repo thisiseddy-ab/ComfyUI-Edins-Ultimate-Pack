@@ -484,7 +484,7 @@ class Padded_Tiling_Service(Tiling_Strategy_Base):
 
         return tile
     
-    def mask_at_boundary(self, h, h_len, w, w_len, tile_w, tile_h, latent_size_h, latent_size_w, mask, device='cpu'):
+    def mask_atBoundary(self, h, h_len, w, w_len, tile_w, tile_h, latent_size_h, latent_size_w, mask, device='cpu'):
         tile_w //= 8
         tile_h //= 8
         
@@ -517,7 +517,7 @@ class Padded_Tiling_Service(Tiling_Strategy_Base):
             tiled_mask = None
             if noise_mask is not None:
                 tiled_mask = self.tensorService.getSlice(noise_mask, y, tile_h, x, tile_w)
-                tiled_mask = self.mask_at_boundary(y, padded_h, x, padded_w, padded_w, padded_h , noise_mask.shape[-2], noise_mask.shape[-1], tiled_mask)
+                tiled_mask = self.mask_atBoundary(y, padded_h, x, padded_w, padded_w, padded_h , noise_mask.shape[-2], noise_mask.shape[-1], tiled_mask)
             
             if tile_mask is not None:
                 if tiled_mask is not None:
@@ -841,7 +841,6 @@ class TKS_Base:
     def common_ksampler(
             self,
             model,
-            add_noise, 
             seed, 
             steps, 
             cfg, 
@@ -854,9 +853,7 @@ class TKS_Base:
             tile_height,
             tiling_strategy,
             padding_strategy,
-            blending,
             padding, 
-            return_with_leftover_noise,
             denoise=1.0,
             disable_noise=False, 
             start_step=None, 
@@ -865,11 +862,6 @@ class TKS_Base:
         ):
 
         device = comfy.model_management.get_torch_device()
-        
-
-        noise_mask = None
-        if "noise_mask" in latent:
-            noise_mask = latent["noise_mask"]
         
         # Step 2: Tile Latent **and Noise**
         tiler = LatentTiler()
@@ -918,6 +910,7 @@ class TKS_Base:
 
                     # Update preview image and step progress
                     pbar.update_absolute(step, preview=preview_bytes)
+            
             # Process each tile
             for tile_index, (tile, noise_tile, noise_mask, mp, mn) in enumerate(zip(tiles, noise_tiles, noise_masks, mod_pos, mod_neg)):
 
@@ -928,35 +921,13 @@ class TKS_Base:
                     cfg=cfg, 
                     latent_image=tile, 
                     start_step=start_step, 
-                    last_step=last_step, 
+                    last_step=last_step,
+                    force_full_denoise=force_full_denoise,
                     denoise_mask=noise_mask, 
                     callback=lambda step, x0, x, total_steps: update_progress(step, x0, x, total_steps, tile_index), 
                     disable_pbar=disable_pbar, 
                     seed=seed
                 )
-                
-                '''
-                processed_tile = comfy.sample.sample(
-                    model=model, 
-                    noise=noise_tile, 
-                    steps=steps, 
-                    cfg=cfg, 
-                    sampler_name=sampler_name, 
-                    scheduler=scheduler, 
-                    positive=mp,
-                    negative=mn, 
-                    latent_image=tile,
-                    denoise=denoise, 
-                    disable_noise=disable_noise, 
-                    start_step=start_step, 
-                    last_step=last_step,
-                    force_full_denoise=force_full_denoise, 
-                    noise_mask=noise_mask, 
-                    callback=lambda step, x0, x, total_steps: update_progress(step, x0, x, total_steps, tile_index),
-                    disable_pbar=disable_pbar, 
-                    seed=seed
-                )
-                '''
 
                 processed_tiles.append(processed_tile)
 
@@ -982,13 +953,12 @@ class Tiled_KSampler (TKS_Base):
                 "positive": ("CONDITIONING", {"tooltip": "The conditioning describing the attributes you want to include in the image."}),
                 "negative": ("CONDITIONING", {"tooltip": "The conditioning describing the attributes you want to exclude from the image."}),
                 "latent_image": ("LATENT", {"tooltip": "The latent image to denoise."}),
-                "denoise": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "The amount of denoising applied, lower values will maintain the structure of the initial image allowing for image to image sampling."}),
-                "tile_width": ("INT", {"default": 64, "min": 1}),
-                "tile_height": ("INT", {"default": 64, "min": 1}),
+                "tile_width": ("INT", {"default": 512, "min": 1}),
+                "tile_height": ("INT", {"default": 512, "min": 1}),
                 "tiling_strategy": (["simple", "random", "padded"],),
                 "padding_strategy": (["organic", "circular", "reflect", "replicate", "zero"],),
                 "padding": ("INT", {"default": 16, "min": 0, "max": 128}),
-                "blending": (["adaptive", "softmax"],),
+                "denoise": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "The amount of denoising applied, lower values will maintain the structure of the initial image allowing for image to image sampling."}),
             }
         }
 
@@ -999,49 +969,15 @@ class Tiled_KSampler (TKS_Base):
     CATEGORY = "EUP - Ultimate Pack/sampling"
     DESCRIPTION = "Uses the provided model, positive and negative conditioning to denoise the latent image."
 
-    def sample(self, 
-               model, 
-               seed, 
-               steps, 
-               cfg, 
-               sampler_name, 
-               scheduler, 
-               positive, 
-               negative, 
-               latent_image, 
-               tile_width, 
-               tile_height, 
-               tiling_strategy, 
-               padding_strategy, 
-               padding,
-               blending, 
-               denoise=1.0,
-               disable_noise=False,
-        ):
+    def sample(self, model, seed, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, 
+               tile_width, tile_height, tiling_strategy, padding_strategy, padding, denoise=1.0,
+               ):
 
         steps_total = int(steps / denoise)
-        return self.common_ksampler(
-            model=model, 
-            add_noise=False,
-            seed=seed, 
-            steps=steps_total, 
-            cfg=cfg, 
-            sampler_name=sampler_name, 
-            scheduler=scheduler, 
-            positive=positive, 
-            negative=negative, 
-            latent=latent_image,  
-            tile_width=tile_width,
-            tile_height=tile_height,
-            tiling_strategy=tiling_strategy,  
-            padding_strategy=padding_strategy,
-            padding=padding,
-            return_with_leftover_noise=False,
-            blending=blending,
-            denoise=denoise,
-            disable_noise=disable_noise,
-            start_step=steps_total-steps,
-            last_step=steps_total,
+
+        return self.common_ksampler(model=model, seed=seed, steps=steps_total, cfg=cfg, sampler_name=sampler_name, scheduler=scheduler, positive=positive, negative=negative, 
+                                    latent=latent_image, tile_width=tile_width, tile_height=tile_height, tiling_strategy=tiling_strategy, padding_strategy=padding_strategy,
+                                    padding=padding, denoise=denoise, start_step=steps_total-steps, last_step=steps_total,
         )
 
 class Tiled_KSamplerAdvanced (TKS_Base):
@@ -1059,16 +995,15 @@ class Tiled_KSamplerAdvanced (TKS_Base):
                 "positive": ("CONDITIONING", {"tooltip": "The conditioning describing the attributes you want to include in the image."}),
                 "negative": ("CONDITIONING", {"tooltip": "The conditioning describing the attributes you want to exclude from the image."}),
                 "latent_image": ("LATENT", {"tooltip": "The latent image to denoise."}),
+                "tile_width": ("INT", {"default": 512, "min": 1}),
+                "tile_height": ("INT", {"default": 512, "min": 1}),
+                "tiling_strategy": (["simple", "random", "padded"],),
+                "padding_strategy": (["organic", "circular", "reflect", "replicate", "zero"],),
+                "padding": ("INT", {"default": 16, "min": 0, "max": 128}),
                 "denoise": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "The amount of denoising applied, lower values will maintain the structure of the initial image allowing for image to image sampling."}),
                 "start_at_step": ("INT", {"default": 0, "min": 0, "max": 10000}),
                 "end_at_step": ("INT", {"default": 10000, "min": 0, "max": 10000}),
                 "return_with_leftover_noise": (["disable", "enable"], ),
-                "tile_width": ("INT", {"default": 64, "min": 1}),
-                "tile_height": ("INT", {"default": 64, "min": 1}),
-                "tiling_strategy": (["simple", "random", "padded"],),
-                "padding_strategy": (["organic", "circular", "reflect", "replicate", "zero"],),
-                "padding": ("INT", {"default": 16, "min": 0, "max": 128}),
-                "blending": (["adaptive", "softmax"],),
             }
         }
 
@@ -1079,55 +1014,26 @@ class Tiled_KSamplerAdvanced (TKS_Base):
     CATEGORY = "EUP - Ultimate Pack/sampling"
     DESCRIPTION = "Uses the provided model, positive and negative conditioning to denoise the latent image."
 
-    def sample(self, 
-               model,
-               add_noise,
-               seed, 
-               steps, 
-               cfg, 
-               sampler_name, 
-               scheduler, 
-               positive, 
-               negative, 
-               latent_image, 
-               tile_width, 
-               tile_height, 
-               tiling_strategy, 
-               padding_strategy, 
-               padding,
-               blending,
-               start_at_step,
-               last_step,
-               return_with_leftover_noise,
-               denoise=1.0,
-        ):
-        return self.common_ksampler(
-            model=model,
-            add_noise=add_noise,
-            seed=seed, 
-            steps=steps, 
-            cfg=cfg, 
-            sampler_name=sampler_name, 
-            scheduler=scheduler, 
-            positive=positive, 
-            negative=negative, 
-            latent=latent_image,  
-            tile_width=tile_width,
-            tile_height=tile_height,
-            tiling_strategy=tiling_strategy,  
-            padding_strategy=padding_strategy,
-            padding=padding,
-            blending=blending,
-            start_at_step=start_at_step,
-            last_step=last_step,
-            return_with_leftover_noise=return_with_leftover_noise,
-            denoise=denoise,
+    def sample(self, model, add_noise, seed, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, 
+            tile_width, tile_height, tiling_strategy, padding_strategy, padding, start_at_step, end_at_step,return_with_leftover_noise, denoise=1.0,
+            ):
+        
+        force_full_denoise = True
+        if return_with_leftover_noise == "enable":
+            force_full_denoise = False
+        disable_noise = False
+        if add_noise == "disable":
+            disable_noise = True
+        
+        return self.common_ksampler(model=model, seed=seed, steps=steps, cfg=cfg, sampler_name=sampler_name, scheduler=scheduler, positive=positive, negative=negative, 
+            latent=latent_image, tile_width=tile_width, tile_height=tile_height, tiling_strategy=tiling_strategy, padding_strategy=padding_strategy, padding=padding,
+            denoise=denoise, disable_noise=disable_noise, start_step=start_at_step, last_step=end_at_step, force_full_denoise=force_full_denoise,
         )
-
+    
 NODE_CLASS_MAPPINGS = {
     "EUP - Latent Upscaler": LatentUpscaler,
     "EUP - Latent Tiler": LatentTiler,
     "EUP - Latent Merger": LatentMerger,
     "EUP - Tiled KSampler" : Tiled_KSampler,
-    "EUP - Tiled KSamplerAdvanced" : Tiled_KSamplerAdvanced
+    "EUP - Tiled KSampler Advanced" : Tiled_KSamplerAdvanced
 }
