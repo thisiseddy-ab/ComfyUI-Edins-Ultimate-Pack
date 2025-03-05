@@ -3,7 +3,7 @@ import warnings
 from server import PromptServer
 
 import comfy_extras.nodes_upscale_model as model_upscale
-from EUP.utils.vae import vae_decode, vae_encode
+from EUP.services.vae import vae_decode, vae_encode
 
 
 from EUP.nodes.latent import Tiled_KSampler

@@ -619,24 +619,25 @@ class LatentTiler:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "latent": ("LATENT",),
+                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
+                "steps": ("INT", {"default": 20, "min": 1, "max": 10000, "tooltip": "The number of steps used in the denoising process."}),
+                "latent_image": ("LATENT", {"tooltip": "The latent image to denoise."}),
                 "positive": ("CONDITIONING", {"tooltip": "The conditioning describing the attributes you want to include in the image."}),
                 "negative": ("CONDITIONING", {"tooltip": "The conditioning describing the attributes you want to exclude from the image."}),
-                "tile_height": ("INT", {"default": 64, "min": 1}),
-                "tile_width": ("INT", {"default": 64, "min": 1}),
+                "tile_width": ("INT", {"default": 512, "min": 320, "max": MAX_RESOLUTION, "step": 64}),
+                "tile_height": ("INT", {"default": 512, "min": 320, "max": MAX_RESOLUTION, "step": 64}),
                 "tiling_strategy": (["simple", "random", "padded"],),
                 "padding_strategy": (["organic", "circular", "reflect", "replicate", "zero"],),
                 "padding": ("INT", {"default": 16, "min": 0, "max": 128}),
-                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
-                "steps": ("INT", {"default": 20, "min": 1, "max": 10000, "tooltip": "The number of steps used in the denoising process."}),
                 "disable_noise": ("BOOLEAN", {"default": False}),
             }
         }
     
     CATEGORY = "EUP - Ultimate Pack/latent"
 
-    RETURN_TYPES = ("LIST", "LIST", "LIST", "LIST", "LIST", "LIST")
-    RETURN_NAMES = ("tiles", "tile_positions", "noise_tiles", "blending_masks", "positive", "negative")
+    RETURN_TYPES = ("LATENT_TILES", "POSITION_LIST", "NOISE_TILES", "NOISE_MASKS", "CONDITIONING", "CONDITIONING")
+    RETURN_NAMES = ("latent_tiles", "tile_positions", "noise_tiles", "noise_masks", "mod_pos", "mod_neg")
+    OUTPUT_IS_LIST = (True, True, True, True, False, False)
 
     FUNCTION = "tileLatent"
 
@@ -656,8 +657,8 @@ class LatentTiler:
 
         return (tile_height, tile_width, padding)
     
-    def tileLatent(self, latent, positive, negative, tile_height, tile_width, tiling_strategy, padding_strategy, padding, seed, steps, disable_noise):
-        samples = latent["samples"]
+    def tileLatent(self, seed, steps, latent_image, positive, negative, tile_width, tile_height, tiling_strategy, padding_strategy, padding, disable_noise):
+        samples = latent_image["samples"]
         shape = samples.shape
         B, C, H, W = shape
 
@@ -667,8 +668,8 @@ class LatentTiler:
         print(f"[EUP - Latent Tiler] Original Latent Size: {samples.shape}")
         print(f"[EUP - Latent Tiler] Tile Size: {tile_height}x{tile_width}")
 
-        noise = self.tilingService.generateRandomNoise(latent, seed, disable_noise)
-        noise_mask = self.tilingService.generateNoiseMask(latent, noise)
+        noise = self.tilingService.generateRandomNoise(latent_image, seed, disable_noise)
+        noise_mask = self.tilingService.generateNoiseMask(latent_image, noise)
 
         if tiling_strategy == "simple":
             tile_positions = self.tilingService.sts_Service.generatePos_forSimpleStrg(W, H, tile_width, tile_height)
@@ -686,7 +687,7 @@ class LatentTiler:
             tiled_tiles = self.tilingService.pts_Service.getTilesforPaddedStrategy(samples, tile_positions)
             tiled_tiles = self.tilingService.pts_Service.getPaddedTilesforPaddedStrategy(tiled_tiles, tile_positions, padding, padding_strategy)
             tiled_noise_masks = self.tilingService.pts_Service.getMaskTilesforPaddedStrategy(noise_mask, tile_positions, tiled_tiles, B)
-            tiled_noise_tiles = self.tilingService.pts_Service.getNoiseTilesforPaddedStrategy(latent, tiled_tiles, seed, disable_noise)
+            tiled_noise_tiles = self.tilingService.pts_Service.getNoiseTilesforPaddedStrategy(latent_image, tiled_tiles, seed, disable_noise)
 
         tiles, noise_tiles, noise_masks, mod_pos, mod_neg = [], [], [], [], []
 
@@ -728,7 +729,7 @@ class LatentTiler:
             mod_pos.append(pos)
             mod_neg.append(neg)
 
-        return (tiles, tile_positions, noise_tiles, noise_masks, mod_pos, mod_neg)
+        return (tiles, tile_positions, noise_tiles, noise_masks, mod_pos, mod_neg,)
 
 class LatentMerger:
     def __init__(self):
@@ -738,11 +739,13 @@ class LatentMerger:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "tiles": ("LIST",),
-                "tile_positions": ("LIST",),
-                "noise_masks": ("LIST",),
+                "latent_tiles": ("LATENT_TILES",),
+                "tile_positions": ("POSITION_LIST",),
+                "noise_masks": ("NOISE_MASKS",),
             }
         }
+
+    INPUT_IS_LIST = (True, True, True,)
 
     CATEGORY = "EUP - Ultimate Pack/latent"
 
@@ -750,7 +753,7 @@ class LatentMerger:
     OUTPUT_TOOLTIPS = ("The merged latent.",)
     FUNCTION = "mergeTiles"
 
-    def mergeTiles(self, tiles, tile_positions, noise_masks):
+    def mergeTiles(self, latent_tiles, tile_positions, noise_masks):
         device = comfy.model_management.get_torch_device()
 
         # Dynamically calculate output dimensions based on tile positions
@@ -762,22 +765,9 @@ class LatentMerger:
         weight_map = torch.zeros_like(merged_samples)
 
 
-        for (tile, (x, y, w, h), mask) in zip(tiles, tile_positions, noise_masks):
-            tile = tile.to(device)
-
-            if tile.dim() == 3:
-                tile = tile.unsqueeze(0)
-
-            if tile.shape[1] == 3:
-                tile = torch.cat([tile, torch.zeros((tile.shape[0], 1, tile.shape[2], tile.shape[3]), device=device)], dim=1)
-
-            mask = mask.to(device)
-
-            if mask.dim() == 3:
-                mask = mask.unsqueeze(0)
-
+        for (tile, (x, y, w, h), mask) in zip(latent_tiles, tile_positions, noise_masks):
+            tile, mask = self.processTileandMask(tile, mask, device)
             valid_tile, valid_mask = self.extractValidRegion(tile, mask, max_height, max_width, x, y)
-
             merged_samples, weight_map = self.applyTiletoMerged(merged_samples, weight_map, valid_tile, valid_mask, x, y, w, h)
 
 
@@ -787,6 +777,22 @@ class LatentMerger:
         print(f"[EUP - Latent Merger] Merged Output Shape : {merged_samples.shape}")
 
         return ({"samples": merged_samples},)
+    
+    def processTileandMask(self, tile, mask, device):
+        tile = tile.to(device)
+
+        if tile.dim() == 3:
+            tile = tile.unsqueeze(0)
+
+        if tile.shape[1] == 3:
+            tile = torch.cat([tile, torch.zeros((tile.shape[0], 1, tile.shape[2], tile.shape[3]), device=device)], dim=1)
+
+        mask = mask.to(device)
+
+        if mask.dim() == 3:
+            mask = mask.unsqueeze(0)
+
+        return (tile, mask)
 
     def applyTiletoMerged(self, merged_samples, weight_map, tile, mask, x, y, w, h):
         # Ensure that the tile and mask dimensions fit within the target region
@@ -832,6 +838,8 @@ class LatentMerger:
         valid_mask = mask[:, :, :valid_mask_h, :valid_mask_w]
 
         return (valid_tile, valid_mask)
+    
+
 
             
 class TKS_Base:
@@ -844,10 +852,10 @@ class TKS_Base:
         # Step 2: Tile Latent **and Noise**
         tiler = LatentTiler()
         tiles, tile_positions, noise_tiles, noise_masks, mod_pos, mod_neg = tiler.tileLatent(
-            latent=latent, positive=positive, negative=negative, tile_width=tile_width, tile_height=tile_height, tiling_strategy=tiling_strategy, 
-            padding_strategy=padding_strategy, padding=padding, seed=seed, steps=steps, disable_noise=disable_noise
+            seed=seed, steps=steps, latent_image=latent, positive=positive, negative=negative, tile_width=tile_width, tile_height=tile_height, 
+            tiling_strategy=tiling_strategy, padding_strategy=padding_strategy, padding=padding, disable_noise=disable_noise
         )
-        
+
         # Prepare and Progress Bar
         disable_pbar = not comfy.utils.PROGRESS_BAR_ENABLED
         if not disable_pbar:
@@ -1000,9 +1008,11 @@ class Tiled_KSamplerAdvanced (TKS_Base):
         )
     
 NODE_CLASS_MAPPINGS = {
-    "EUP - Latent Upscaler": LatentUpscaler,
     "EUP - Latent Tiler": LatentTiler,
     "EUP - Latent Merger": LatentMerger,
     "EUP - Tiled KSampler" : Tiled_KSampler,
     "EUP - Tiled KSampler Advanced" : Tiled_KSamplerAdvanced
+}
+
+NODE_DISPLAY_NAME_MAPPINGS = {
 }

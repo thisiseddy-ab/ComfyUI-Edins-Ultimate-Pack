@@ -17,28 +17,33 @@ if parent_dir not in sys.path:
 print("EUP directory exists:", os.path.exists(EUP_directory_path))
 print("sys.path includes parent dir:", parent_dir in sys.path)
 
-_modules_to_import_ = [
+_service_to_import_ = [
     "basic_utils"
     ]
+
 _nodes_to_import_ = [
 
     "latent",
     "upscaler",
     ]
 
-NODE_CLASS_MAPPINGS = {
+NODE_CLASS_MAPPINGS = {}
 
-}
-__all__ = ["NODE_CLASS_MAPPINGS"]
+NODE_DISPLAY_NAME_MAPPINGS = {}
 
-for module_name in _modules_to_import_:
+__all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
+
+
+#### IMPORT SERVICES ####
+for service_name in _service_to_import_:
     try:
-        module = importlib.import_module(f"EUP.utils.{module_name}")
-        globals()[module_name] = module
-        __all__.append(module_name)
+        module = importlib.import_module(f"EUP.services.{service_name}")
+        globals()[service_name] = module
+        __all__.append(service_name)
     except ModuleNotFoundError as e:
-        print(f"Error importing {module_name}: {e}")
+        print(f"Error importing {service_name}: {e}")
 
+#### IMPORT NODES ####
 for nodes_name in _nodes_to_import_:
     try:
         nodes_module = importlib.import_module(f"EUP.nodes.{nodes_name}")
@@ -50,5 +55,10 @@ for nodes_name in _nodes_to_import_:
             NODE_CLASS_MAPPINGS = {**NODE_CLASS_MAPPINGS, **nodes_module.NODE_CLASS_MAPPINGS}
         else:
             print(f"Warning: {nodes_name} does not have NODE_CLASS_MAPPINGS, skipping merge.")
+        
+        if hasattr(nodes_module, "NODE_DISPLAY_NAME_MAPPINGS"):
+            NODE_DISPLAY_NAME_MAPPINGS = {**NODE_DISPLAY_NAME_MAPPINGS, **nodes_module.NODE_DISPLAY_NAME_MAPPINGS}
+        else:
+            print(f"Warning: {nodes_name} does not have NODE_DISPLAY_NAME_MAPPINGS")
     except ModuleNotFoundError as e:
-        print(f"Error importing {nodes_name}: {e}")
+        print(f"Error importing {nodes_name}: {e}") 

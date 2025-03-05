@@ -26,7 +26,7 @@ class IterativeLatentUpscale:
     RETURN_NAMES = ("latent", "vae")
     FUNCTION = "doit"
 
-    CATEGORY = "ImpactPack/Upscale"
+    CATEGORY = "EUP - Ultimate Pack/Upscale"
 
     def doit(self, samples, upscale_factor, steps, temp_prefix, upscaler, step_mode="simple", unique_id=None):
         w = samples['samples'].shape[3]*8  # image width
@@ -160,8 +160,11 @@ class PixelTiledKSampleUpscalerProviderPipe:
     
 
 NODE_CLASS_MAPPINGS = {
-    "EUP - Iterative Latent Upscale": IterativeLatentUpscale,
+    "EUP - Iterative Latent Upscaler": IterativeLatentUpscale,
     "EUP - Pixel TiledKSample Upscaler Provider": PixelTiledKSampleUpscalerProvider,
     "EUP - Pixel TiledKSample Upscaler Provider Pipe": PixelTiledKSampleUpscalerProviderPipe,
+}
+
+NODE_DISPLAY_NAME_MAPPINGS = {
 }
 
