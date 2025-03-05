@@ -92,10 +92,22 @@ class ControlNetService():
             model.cond_hint = hint.to(model.control_model.dtype).to(model.control_model.device)
     
     def prepareSlicedCnets(self, pos, neg, cnets, cnet_imgs, tile_h, tile_h_len, tile_w, tile_w_len):
-        for m, img in zip(cnets, cnet_imgs):
+        for idx, (m, img) in enumerate(zip(cnets, cnet_imgs)):
             self.sliceCnet(tile_h, tile_h_len, tile_w, tile_w_len, m, img)
-            pos.append((None, {'control': m}))
-            neg.append((None, {'control': m}))
+            
+            # Replace the original 'control' key in the corresponding positions
+            if idx < len(pos):
+                pos[idx] = (None, {'control': m})
+            else:
+                pos.append((None, {'control': m}))
+            
+            if idx < len(neg):
+                neg[idx] = (None, {'control': m})
+            else:
+                neg.append((None, {'control': m}))
+        
+        # Return the modified pos and neg lists
+        return pos, neg
 
 
 class T2IService():
@@ -122,10 +134,22 @@ class T2IService():
         model.cond_hint = self.tensorService.getSlice(img, h*8, h_len*8, w*8, w_len*8).float().to(model.device)
 
     def prepareSlicedT2Is(self, pos, neg, T2Is, T2I_imgs, tile_h, tile_h_len, tile_w, tile_w_len):
-        for m, img in zip(T2Is, T2I_imgs):
+        for idx, (m, img) in enumerate(zip(T2Is, T2I_imgs)):
             self.slices_T2I(tile_h, tile_h_len, tile_w, tile_w_len, m, img)
-            pos.append((None, {'control': m}))
-            neg.append((None, {'control': m}))
+            
+            # Replace the original 'control' key in the corresponding positions
+            if idx < len(pos):
+                pos[idx] = (None, {'control': m})
+            else:
+                pos.append((None, {'control': m}))
+            
+            if idx < len(neg):
+                neg[idx] = (None, {'control': m})
+            else:
+                neg.append((None, {'control': m}))
+        
+        # Return the modified pos and neg lists
+        return pos, neg
 
 class GligenService():
 
@@ -166,10 +190,14 @@ class GligenService():
             cond['gligen'] = (gligen_type, gligen_model, gligen_areas_new)
 
     def prepsreSlicedGligen(self, pos, neg, gligen_pos, gligen_neg, tile_h, tile_h_len, tile_w, tile_w_len):
+        # Modify 'pos' and 'neg' lists in place by slicing the gligen conditions
         for cond, gligen in zip(pos, gligen_pos):
             self.sliceGligen(tile_h, tile_h_len, tile_w, tile_w_len, cond, gligen)
         for cond, gligen in zip(neg, gligen_neg):
             self.sliceGligen(tile_h, tile_h_len, tile_w, tile_w_len, cond, gligen)
+        
+        # Return the modified 'pos' and 'neg' lists
+        return pos, neg
 
 class Spatial_Condition_Service():
     def __init__(self):
@@ -635,9 +663,9 @@ class LatentTiler:
     
     CATEGORY = "EUP - Ultimate Pack/latent"
 
-    RETURN_TYPES = ("LATENT_TILES", "POSITION_LIST", "NOISE_TILES", "NOISE_MASKS", "CONDITIONING", "CONDITIONING")
+    RETURN_TYPES = ("LATENT_TILES", "POSITION_LIST", "NOISE_TILES", "NOISE_MASKS", "CONDITIONING_LIST", "CONDITIONING_LIST")
     RETURN_NAMES = ("latent_tiles", "tile_positions", "noise_tiles", "noise_masks", "mod_pos", "mod_neg")
-    OUTPUT_IS_LIST = (True, True, True, True, False, False)
+    OUTPUT_IS_LIST = (True, True, True, True, True, True)
 
     FUNCTION = "tileLatent"
 
@@ -708,15 +736,15 @@ class LatentTiler:
 
             #### Slice cnets, T2Is, gligen, and spatial conditions for the current tile ####
             ## Slice CNETS ##
-            self.conrolNetService.prepareSlicedCnets(pos, neg, cnets, cnet_imgs, y, tile_h, x, tile_w)
+            pos, neg, self.conrolNetService.prepareSlicedCnets(pos, neg, cnets, cnet_imgs, y, tile_h, x, tile_w)
             ## Slice T2Is ##
-            self.t2iService.prepareSlicedT2Is(pos, neg, T2Is, T2I_imgs, y, tile_h, x, tile_w)
+            pos, neg = self.t2iService.prepareSlicedT2Is(pos, neg, T2Is, T2I_imgs, y, tile_h, x, tile_w)
 
             ## Slice Spatial Conditions  ##
             pos, neg = self.conditionService.sptcondService.prepareSlicedConds(pos, neg, sptcond_pos, sptcond_neg, y, tile_h, x, tile_w)
 
             # Slice GLIGEN ##
-            self.gligenService.prepsreSlicedGligen(pos, neg, gligen_pos, gligen_neg, y, tile_h, x, tile_w)
+            pos, neg = self.gligenService.prepsreSlicedGligen(pos, neg, gligen_pos, gligen_neg, y, tile_h, x, tile_w)
 
             #### Appending Needed Resources ####
             # Append Sliced Tiles
