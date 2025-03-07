@@ -479,13 +479,19 @@ class RTService(Tiling_Strategy_Base):
             allTiles.append(blend_mask)
         return allTiles
     
-    
+###### Multi-Pass - Random Tiling Strategy ######   
+class MP_RTService(Tiling_Strategy_Base):
+
+    def __init__(self):
+        super().__init__()
+
+###### Singel Pass - Padded Tiling Strategy ######
 class PTService(Tiling_Strategy_Base):
 
     def __init__(self):
         super().__init__()
     
-    def generatePos_forPaddStrategy(self, latent_width: int, latent_height: int, tile_width: int, tile_height: int, padding: int) -> List[Tuple[int, int, int, int]]:
+    def generatePos_forPTStrategy(self, latent_width: int, latent_height: int, tile_width: int, tile_height: int, padding: int) -> List[Tuple[int, int, int, int]]:
         # Calculate how many tiles fit in each dimension
         num_tiles_x = latent_width // tile_width
         num_tiles_y = latent_height // tile_height
@@ -514,76 +520,16 @@ class PTService(Tiling_Strategy_Base):
                 tile_positions.append((x, y, padded_tile_width, padded_tile_height))
 
         return tile_positions
-
-    def applyOrganicPadding(self, tile, pad):
-        """Applies seamless mirrored padding with soft blending and natural variation, avoiding boxy artifacts."""
-        B, C, H, W = tile.shape
-        
-        # Unpack padding only for the sides where padding exists (values > 0)
-        pad_len = len(pad)
-        
-        # Default to 0 for missing sides (we could append missing sides as 0, so no padding is applied)
-        left = pad[0] if pad_len > 0 else 0
-        right = pad[1] if pad_len > 1 else 0
-        top = pad[2] if pad_len > 2 else 0
-        bottom = pad[3] if pad_len > 3 else 0
-
-        # Create the padded tile
-        padded_tile = torch.zeros((B, C, H + top + bottom, W + left + right), device=tile.device, dtype=tile.dtype)
-
-        # Place the original tile in the center
-        padded_tile[:, :, top:top + H, left:left + W] = tile
-
-        def soft_blend(patch, expand_shape, flip_dims, blend_factor=0.7):
-            """Mirrors a patch and blends it softly with adaptive randomness."""
-            mirrored = patch
-            for flip_dim in flip_dims:
-                mirrored = torch.flip(mirrored, dims=[flip_dim])  # Mirror flip in both directions
-
-            # Adaptive blending factor (less boxy)
-            blend_factor = torch.tensor(blend_factor, device=tile.device).expand_as(patch)
-
-            # Perlin-style noise (natural variation, no harsh edges)
-            noise = (torch.rand_like(patch) - 0.5) * 1.5  # Random noise in [-0.5, 0.5]
-            blend_factor = torch.clamp(blend_factor + noise, 0.4, 0.5)  # Adaptive range
-
-            return (patch * blend_factor + mirrored * (1 - blend_factor)).expand(expand_shape)
-
-        # Left padding (soft blended from left edge)
-        if left > 0:
-            left_patch = soft_blend(tile[:, :, :, :left], (B, C, H, left), flip_dims=[3], blend_factor=0.55)
-            padded_tile[:, :, top:top + H, :left] = left_patch
-
-        # Right padding
-        if right > 0:
-            right_patch = soft_blend(tile[:, :, :, -right:], (B, C, H, right), flip_dims=[3], blend_factor=0.55)
-            padded_tile[:, :, top:top + H, -right:] = right_patch
-
-        # Top padding
-        if top > 0:
-            top_patch = soft_blend(tile[:, :, :top, :], (B, C, top, W), flip_dims=[2], blend_factor=0.55)
-            padded_tile[:, :, :top, left:left + W] = top_patch
-
-        # Bottom padding
-        if bottom > 0:
-            bottom_patch = soft_blend(tile[:, :, -bottom:, :], (B, C, bottom, W), flip_dims=[2], blend_factor=0.55)
-            padded_tile[:, :, -bottom:, left:left + W] = bottom_patch
-
-        # Corner regions (blend both X and Y for smooth edges)
-        if left > 0 and top > 0:
-            padded_tile[:, :, :top, :left] = soft_blend(tile[:, :, :top, :left], (B, C, top, left), flip_dims=[2, 3], blend_factor=0.35)
-
-        if right > 0 and top > 0:
-            padded_tile[:, :, :top, -right:] = soft_blend(tile[:, :, :top, -right:], (B, C, top, right), flip_dims=[2, 3], blend_factor=0.35)
-
-        if left > 0 and bottom > 0:
-            padded_tile[:, :, -bottom:, :left] = soft_blend(tile[:, :, -bottom:, :left], (B, C, bottom, left), flip_dims=[2, 3], blend_factor=0.35)
-
-        if right > 0 and bottom > 0:
-            padded_tile[:, :, -bottom:, -right:] = soft_blend(tile[:, :, -bottom:, -right:], (B, C, bottom, right), flip_dims=[2, 3], blend_factor=0.35)
-
-        return padded_tile
-            
+    
+    def getTilesforPTStrategy(self, samples, tile_positions):
+        return self.getTilesfromTilePos(samples, tile_positions)
+    
+    def getPaddedTilesforPTStrategy(self, tiled_tiles, tile_positions, padding, padding_strategy):
+        allPaddedTiles = []
+        for (x, y, tile_w, tile_h), tile in zip(tile_positions, tiled_tiles):
+            allPaddedTiles.append(self.applyPadding(tile, padding, padding_strategy, x, y, tile_positions))
+        return allPaddedTiles
+    
     def applyPadding(self, tile, padding, strategy, pos_x, pos_y, tile_positions):
         # Calculate number of tiles in x and y directions based on tile_positions
         num_tiles_x = max((x + tile_w) for (x, _, tile_w, _) in tile_positions) // tile.shape[-1] + 1
@@ -606,21 +552,98 @@ class PTService(Tiling_Strategy_Base):
 
         return tile
     
-    def getTilesforPaddedStrategy(self, samples, tile_positions):
-        return self.getTilesfromTilePos(samples, tile_positions)
-    
-    def getPaddedTilesforPaddedStrategy(self, tiled_tiles, tile_positions, padding, padding_strategy):
-        allPaddedTiles = []
-        for (x, y, tile_w, tile_h), tile in zip(tile_positions, tiled_tiles):
-            allPaddedTiles.append(self.applyPadding(tile, padding, padding_strategy, x, y, tile_positions))
-        return allPaddedTiles
+    def applyOrganicPadding(self, tile, pad):
+        """Applies seamless mirrored padding with soft blending and natural variation, avoiding boxy artifacts."""
+        B, C, H, W = tile.shape
+        
+        # Unpack padding only for the sides where padding exists (values > 0)
+        pad_len = len(pad)
+        
+        # Default to 0 for missing sides (we could append missing sides as 0, so no padding is applied)
+        left = pad[0] if pad_len > 0 else 0
+        right = pad[1] if pad_len > 1 else 0
+        top = pad[2] if pad_len > 2 else 0
+        bottom = pad[3] if pad_len > 3 else 0
 
-    def getMaskTilesforPaddedStrategy(self, noise_mask, tile_positions, padded_tiles, B):
+        # Create the padded tile
+        padded_tile = torch.zeros((B, C, H + top + bottom, W + left + right), device=tile.device, dtype=tile.dtype)
+
+        # Place the original tile in the center
+        padded_tile[:, :, top:top + H, left:left + W] = tile
+
+        # Left padding (soft blended from left edge)
+        if left > 0:
+            left_patch = self.softBlend(tile[:, :, :, :left], (B, C, H, left), flip_dims=[3], device=tile.device, blend_factor=0.55)
+            padded_tile[:, :, top:top + H, :left] = left_patch
+
+        # Right padding
+        if right > 0:
+            right_patch = self.softBlend(tile[:, :, :, -right:], (B, C, H, right), flip_dims=[3], device=tile.device, blend_factor=0.55)
+            padded_tile[:, :, top:top + H, -right:] = right_patch
+
+        # Top padding
+        if top > 0:
+            top_patch = self.softBlend(tile[:, :, :top, :], (B, C, top, W), flip_dims=[2], device=tile.device, blend_factor=0.55)
+            padded_tile[:, :, :top, left:left + W] = top_patch
+
+        # Bottom padding
+        if bottom > 0:
+            bottom_patch = self.softBlend(tile[:, :, -bottom:, :], (B, C, bottom, W), flip_dims=[2], device=tile.device, blend_factor=0.55)
+            padded_tile[:, :, -bottom:, left:left + W] = bottom_patch
+
+        # Corner regions (blend both X and Y for smooth edges)
+        if left > 0 and top > 0:
+            padded_tile[:, :, :top, :left] = self.softBlend(tile[:, :, :top, :left], (B, C, top, left), flip_dims=[2, 3], device=tile.device, blend_factor=0.35)
+
+        if right > 0 and top > 0:
+            padded_tile[:, :, :top, -right:] = self.softBlend(tile[:, :, :top, -right:], (B, C, top, right), flip_dims=[2, 3], device=tile.device, blend_factor=0.35)
+
+        if left > 0 and bottom > 0:
+            padded_tile[:, :, -bottom:, :left] = self.softBlend(tile[:, :, -bottom:, :left], (B, C, bottom, left), flip_dims=[2, 3], device=tile.device, blend_factor=0.35)
+
+        if right > 0 and bottom > 0:
+            padded_tile[:, :, -bottom:, -right:] = self.softBlend(tile[:, :, -bottom:, -right:], (B, C, bottom, right), flip_dims=[2, 3], device=tile.device, blend_factor=0.35)
+
+        return padded_tile
+    
+    def softBlend(self, patch, expand_shape, flip_dims, device,  blend_factor=0.7):
+        """Mirrors a patch and blends it softly with adaptive randomness."""
+        mirrored = patch
+        for flip_dim in flip_dims:
+            mirrored = torch.flip(mirrored, dims=[flip_dim])  # Mirror flip in both directions
+
+        # Adaptive blending factor (less boxy)
+        blend_factor = torch.tensor(blend_factor, device=device).expand_as(patch)
+
+        # Perlin-style noise (natural variation, no harsh edges)
+        noise = (torch.rand_like(patch) - 0.5) * 1.5  # Random noise in [-0.5, 0.5]
+        blend_factor = torch.clamp(blend_factor + noise, 0.4, 0.5)  # Adaptive range
+
+        return (patch * blend_factor + mirrored * (1 - blend_factor)).expand(expand_shape)
+    
+    def getNoiseTilesforPTStrategy(self, latent, padded_tiles, seed, disable_noise: bool):
+        allTiles = []
+        samples = latent.get("samples")
+        shape = samples.shape
+        B, C, H, W = shape
+        for padded_tile in padded_tiles:
+            tile_shape = padded_tile.shape
+            x, y, h, w = tile_shape
+            if disable_noise:
+                allTiles.append(torch.zeros((B, C, h, w), dtype=samples.dtype, layout=samples.layout, device="cpu"))
+            else:
+                allTiles.append(comfy.sample.prepare_noise(padded_tile, seed, B))
+        return allTiles
+
+    def generateDenoiseMaskforPTStrategy(self,):
+        return None
+
+    def getDenoiseMaskTilesforPTStrategy(self, noise_mask, tile_positions, padded_tiles, B):
         allTiles = []
         for (x, y, tile_w, tile_h), padded_tile in zip(tile_positions, padded_tiles):
             padded_h = padded_tile.shape[-2]
             padded_w = padded_tile.shape[-1]
-            tile_mask = self.createMask(B, padded_h, padded_w)
+            tile_mask = self.generateDenoiseMaskforPTStrategy()
             tiled_mask = None
             if noise_mask is not None:
                 tiled_mask = self.tensorService.getSlice(noise_mask, y, tile_h, x, tile_w)
@@ -634,19 +657,15 @@ class PTService(Tiling_Strategy_Base):
             allTiles.append(tiled_mask)
         return allTiles
     
-    def getNoiseTilesforPaddedStrategy(self, latent, padded_tiles, seed, disable_noise: bool):
+    def getBlendMaskTilesforPTStrategy(self, tile_positions, padded_tiles, B):
         allTiles = []
-        samples = latent.get("samples")
-        shape = samples.shape
-        B, C, H, W = shape
-        for padded_tile in padded_tiles:
-            tile_shape = padded_tile.shape
-            x, y, h, w = tile_shape
-            if disable_noise:
-                allTiles.append(torch.zeros((B, C, h, w), dtype=samples.dtype, layout=samples.layout, device="cpu"))
-            else:
-                allTiles.append(comfy.sample.prepare_noise(padded_tile, seed, B))
+        for (x, y, tile_w, tile_h), padded_tile in zip(tile_positions, padded_tiles):
+            padded_h = padded_tile.shape[-2]
+            padded_w = padded_tile.shape[-1]
+            blend_mask = self.generateGenBlendMask(B, padded_h, padded_w)
+            allTiles.append(blend_mask)
         return allTiles
+    
 
 ###### Multi-Pass - Context-Padded Tiling Strategy ######   
 class MP_CPTService(Tiling_Strategy_Base):
@@ -866,23 +885,24 @@ class LatentTiler:
 
         if tiling_mode == "single_pass":
             if tiling_strategy == "simple":
-                tile_positions = self.tilingService.sts_Service.generatePos_forSTStrategy(W, H, tile_width, tile_height)
-                tiled_tiles = self.tilingService.sts_Service.getTilesforSTStrategy(samples, tile_positions)
-                tiled_noise_tiles = self.tilingService.sts_Service.getNoiseTilesforSTStrategy(noise, tile_positions)
-                tiled_denoise_masks = self.tilingService.sts_Service.getDenoiseMaskTilesforSTStrategy(noise_mask, tile_positions, B)
-                tiled_blend_masks = self.tilingService.sts_Service.getBlendMaskTilesforSTStrategy(tile_positions, B)
+                tiled_positions = self.tilingService.sts_Service.generatePos_forSTStrategy(W, H, tile_width, tile_height)
+                tiled_tiles = self.tilingService.sts_Service.getTilesforSTStrategy(samples, tiled_positions)
+                tiled_noise_tiles = self.tilingService.sts_Service.getNoiseTilesforSTStrategy(noise, tiled_positions)
+                tiled_denoise_masks = self.tilingService.sts_Service.getDenoiseMaskTilesforSTStrategy(noise_mask, tiled_positions, B)
+                tiled_blend_masks = self.tilingService.sts_Service.getBlendMaskTilesforSTStrategy(tiled_positions, B)
             elif tiling_strategy == "random":
-                tile_positions = self.tilingService.rts_Service.generatePos_forRTStrategy(W, H, tile_width, tile_height, seed)
-                tiled_tiles = self.tilingService.rts_Service.getTilesforRTStrategy(samples, tile_positions)
-                tiled_noise_tiles = self.tilingService.rts_Service.getNoiseTilesforRTStrategy(noise, tile_positions)
-                tiled_denoise_masks = self.tilingService.rts_Service.getDenoiseMaskTilesforRTStrategy(noise_mask, tile_positions, B)
-                tiled_blend_masks = self.tilingService.rts_Service.getBlendMaskTilesforRTStrategy(tile_positions, B)
+                tiled_positions = self.tilingService.rts_Service.generatePos_forRTStrategy(W, H, tile_width, tile_height, seed)
+                tiled_tiles = self.tilingService.rts_Service.getTilesforRTStrategy(samples, tiled_positions)
+                tiled_noise_tiles = self.tilingService.rts_Service.getNoiseTilesforRTStrategy(noise, tiled_positions)
+                tiled_denoise_masks = self.tilingService.rts_Service.getDenoiseMaskTilesforRTStrategy(noise_mask, tiled_positions, B)
+                tiled_blend_masks = self.tilingService.rts_Service.getBlendMaskTilesforRTStrategy(tiled_positions, B)
             elif tiling_strategy == "padded":
-                tile_positions = self.tilingService.pts_Service.generatePos_forPaddStrategy(W, H, tile_width, tile_height, padding)
-                tiled_tiles = self.tilingService.pts_Service.getTilesforPaddedStrategy(samples, tile_positions)
-                tiled_tiles = self.tilingService.pts_Service.getPaddedTilesforPaddedStrategy(tiled_tiles, tile_positions, padding, padding_strategy)
-                tiled_noise_tiles = self.tilingService.pts_Service.getNoiseTilesforPaddedStrategy(latent_image, tiled_tiles, seed, disable_noise)
-                tiled_denoise_masks = self.tilingService.pts_Service.getMaskTilesforPaddedStrategy(noise_mask, tile_positions, tiled_tiles, B)
+                tiled_positions = self.tilingService.pts_Service.generatePos_forPTStrategy(W, H, tile_width, tile_height, padding)
+                tiled_tiles = self.tilingService.pts_Service.getTilesforPTStrategy(samples, tiled_positions)
+                tiled_tiles = self.tilingService.pts_Service.getPaddedTilesforPTStrategy(tiled_tiles, tiled_positions, padding, padding_strategy)
+                tiled_noise_tiles = self.tilingService.pts_Service.getNoiseTilesforPTStrategy(latent_image, tiled_tiles, seed, disable_noise)
+                tiled_denoise_masks = self.tilingService.pts_Service.getDenoiseMaskTilesforPTStrategy(noise_mask, tiled_positions, tiled_tiles, B)
+                tiled_blend_masks = self.tilingService.pts_Service.getBlendMaskTilesforPTStrategy(tiled_positions, tiled_tiles, B)
         elif tiling_mode == "multi_pass":
             if tiling_strategy == "context padded":
                 tile_pos_and_steps = self.tilingService.mp_cpt_Service.generatePos_forMP_CPTStrategy(W, H, tile_width, tile_height, steps)
@@ -894,11 +914,11 @@ class LatentTiler:
             raise ValueError("[EUP - Latent Tiler]: Warning: Invalid Tiling Mode. Please select a valid Tiling Mode.")
 
         if tiling_mode == "single_pass":
-            return self.prepareTilesforSingelPassMode(positive, negative, shape, samples, tile_positions, tiled_tiles, tiled_noise_tiles, tiled_denoise_masks, tiled_blend_masks)
+            return self.prepareTilesforSingelPassMode(positive, negative, shape, samples, tiled_positions, tiled_tiles, tiled_noise_tiles, tiled_denoise_masks, tiled_blend_masks)
         elif tiling_mode == "multi_pass":
             return self.prepareTilesforMultiPassMode(positive, negative, shape, samples, tile_pos_and_steps, tiled_tiles, tiled_noise_tiles, tiled_denoise_masks, tiled_blend_masks)
     
-    def prepareTilesforSingelPassMode(self, positive, negative, shape, samples, tile_positions, tiled_tiles, tiled_noise_tiles, tiled_denoise_masks, tiled_blend_masks):
+    def prepareTilesforSingelPassMode(self, positive, negative, shape, samples, tiled_positions, tiled_tiles, tiled_noise_tiles, tiled_denoise_masks, tiled_blend_masks):
 
         # Extract and prepare cnets, T2Is, gligen, and spatial conditions
         cnets = self.conrolNetService.extractCnet(positive, negative)
@@ -908,12 +928,10 @@ class LatentTiler:
         gligen_pos, gligen_neg = self.gligenService.extractGligen(positive, negative)
         sptcond_pos, sptcond_neg = self.conditionService.sptcondService.extractSpatialConds(positive, negative, shape, samples.device)
 
-        # Process each tile
         tiled_latent = []
         tile_pass_l = []
         tile_group_l = []
-        print("Lengths:", len(tile_positions), len(tiled_tiles), len(tiled_noise_tiles), len(tiled_denoise_masks))
-        for (x, y, tile_w, tile_h), tile, noise_tile, denoise_mask, blend_mask in zip(tile_positions, tiled_tiles, tiled_noise_tiles, tiled_denoise_masks, tiled_blend_masks):
+        for (x, y, tile_w, tile_h), tile, noise_tile, denoise_mask, blend_mask in zip(tiled_positions, tiled_tiles, tiled_noise_tiles, tiled_denoise_masks, tiled_blend_masks):
             
             # Copy positive and negative lists for modification
             pos = [c.copy() for c in positive]
@@ -945,7 +963,7 @@ class LatentTiler:
         T2I_imgs = self.t2iService.prepareT2I_imgs(T2Is, shape)
         gligen_pos, gligen_neg = self.gligenService.extractGligen(positive, negative)
         sptcond_pos, sptcond_neg = self.conditionService.sptcondService.extractSpatialConds(positive, negative, shape, samples.device)
-        print("Lengths:", len(tile_pos_and_steps), len(tiled_tiles), len(tiled_noise_tiles), len(tiled_denoise_masks))
+        
         tiled_latent = []
         for tiled_pos_pass, tiled_tile_pass, tiled_noise_pass, tiled_denoise_mask_pass , tiled_blend_mask_pass in zip(tile_pos_and_steps, tiled_tiles, tiled_noise_tiles, tiled_denoise_masks, tiled_blend_masks):
             tile_pass_l = []
