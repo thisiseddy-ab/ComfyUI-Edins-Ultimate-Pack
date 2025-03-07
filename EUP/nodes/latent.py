@@ -666,6 +666,11 @@ class PTService(Tiling_Strategy_Base):
             allTiles.append(blend_mask)
         return allTiles
     
+###### Multi-Pass - Padded Tiling Strategy ######   
+class MP_PTService(Tiling_Strategy_Base):
+
+    def __init__(self):
+        super().__init__()
 
 ###### Multi-Pass - Context-Padded Tiling Strategy ######   
 class MP_CPTService(Tiling_Strategy_Base):
@@ -813,6 +818,8 @@ class TilingService(Tiling_Strategy_Base):
         
         # mp_st - Stands for Multi-Pass Simple Tiling Strategy
         self.mp_st_Service = MP_STService()
+        # mp_rt - Stands for Multi-Pass Random Tiling Strategy
+        self.mp_rt_Service = MP_RTService()
         # mp_cpt - Stands for Multi-Pass Context-Padded Tiling Stretegy
         self.mp_cpt_Service = MP_CPTService()
 
