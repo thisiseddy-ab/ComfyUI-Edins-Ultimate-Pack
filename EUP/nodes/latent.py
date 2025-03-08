@@ -310,6 +310,41 @@ class Tiling_Strategy_Base():
             
             return mask
     
+    def generateGenDenoiseMask(self, tile_h, tile_w, border_strength=1.0, falloff=0.35, device='cpu'):
+        """
+        Generates a general denoise mask that reduces changes at the borders to prevent seams.
+
+        Parameters:
+            tile_h (int): The height of the tile.
+            tile_w (int): The width of the tile.
+            border_strength (float): The intensity of the border preservation (higher = less change at borders).
+            falloff (float): Controls how smoothly the mask transitions from border to center.
+            device (str): The device to place the tensor on ('cpu' or 'cuda').
+
+        Returns:
+            torch.Tensor: The generated denoise mask.
+        """
+        h = tile_h
+        w = tile_w
+        y, x = np.ogrid[:h, :w]
+
+        # Distance from borders
+        dist_x = np.minimum(x, w - 1 - x)
+        dist_y = np.minimum(y, h - 1 - y)
+        dist = np.minimum(dist_x, dist_y)
+
+        # Normalize distance to [0, 1] range
+        max_dist = np.min([w, h]) / 2
+        normalized_dist = dist / max_dist
+
+        # Apply border_strength and falloff to control the mask
+        mask = np.clip((normalized_dist ** falloff) * border_strength, 0, 1)
+
+        # Convert to torch tensor
+        mask_tensor = torch.tensor(mask, dtype=torch.float32, device=device)
+
+        return mask_tensor
+    
     def generateRandomNoise(self, latent, seed, disable_noise: bool):
         samples = latent.get("samples")
         shape = samples.shape
@@ -349,19 +384,23 @@ class Tiling_Strategy_Base():
         return self.getTilesfromTilePos(noise_tensor, tile_positions)
     
     def generateMask_atBoundary(self, h, h_len, w, w_len, tile_w, tile_h, latent_size_h, latent_size_w, mask, device='cpu'):
-        tile_w //= 8
-        tile_h //= 8
-        
+        # Check if a mask is needed at the boundary
         if (h_len == tile_h or h_len == latent_size_h) and (w_len == tile_w or w_len == latent_size_w):
-            return h, h_len, w, w_len, mask
+            print("No need to generate mask at boundary")
+            return ((w, h, w_len, h_len), mask)
         
+        # Calculate the offsets
         h_offset = min(0, latent_size_h - (h + tile_h))
         w_offset = min(0, latent_size_w - (w + tile_w))
         
+        # Create a new mask tensor
         new_mask = torch.zeros((1, 1, tile_h, tile_w), dtype=torch.float32, device=device)
+
+        # Apply the mask or create a new one if none is provided
         new_mask[:, :, -h_offset:h_len if h_offset == 0 else tile_h, -w_offset:w_len if w_offset == 0 else tile_w] = 1.0 if mask is None else mask
         
-        return h + h_offset, tile_h, w + w_offset, tile_w, new_mask
+        print("Generated mask at boundary")
+        return ((w + w_offset, h + h_offset, tile_w, tile_h), new_mask)
     
 ###### Singel Pass - Simple Tiling Strategy ######  
 class STService(Tiling_Strategy_Base):
@@ -400,13 +439,13 @@ class STService(Tiling_Strategy_Base):
     def getNoiseTilesforSTStrategy(self, noise_tensor , tile_positions):
         return self.getTilesfromTilePos(noise_tensor, tile_positions)
     
-    def generateDenoiseMaskforSTStrategy(self,):
-        return None
+    def generateDenoiseMaskforSTStrategy(self, tile_h, tile_w, border_strength=1.0, falloff=0.5 ):
+        return self.generateGenDenoiseMask(tile_h, tile_w, border_strength, falloff)
     
     def getDenoiseMaskTilesforSTStrategy(self, noise_mask, tile_positions, B):
         allTiles = []
         for x, y, tile_w, tile_h in tile_positions:
-            tile_mask = self.generateDenoiseMaskforSTStrategy()
+            tile_mask = self.generateDenoiseMaskforSTStrategy(tile_h, tile_w)
             tiled_mask = None
             if noise_mask is not None:
                 tiled_mask = self.tensorService.getSlice(noise_mask, y, tile_h, x, tile_w)
@@ -428,13 +467,14 @@ class STService(Tiling_Strategy_Base):
 ###### Multi-Pass - Simple Tiling Strategy ######   
 class MP_STService(Tiling_Strategy_Base):
     
-    def __init__(self):
+    def __init__(self, passes: int = 2):
         super().__init__()
+        self.passes = passes
 
         # sts - Stands for Simple Tiling Streteg
         self.sts_Service = STService()
 
-    def generatePos_forMP_STStrategy(self, latent_width: int, latent_height: int, tile_width: int, tile_height: int, passes: int = 2):
+    def generatePos_forMP_STStrategy(self, latent_width: int, latent_height: int, tile_width: int, tile_height: int):
         """
         Generates multiple passes of simple tiling with alternating shifts.
         """
@@ -453,7 +493,7 @@ class MP_STService(Tiling_Strategy_Base):
         # Multi-pass tile position storage
         passes_list = []
 
-        for p in range(passes):
+        for p in range(self.passes):
             # Create shift for alternating passes
             shift_x = (adjusted_tile_width // 2) * (p % 2)  # Shift every other pass
             shift_y = (adjusted_tile_height // 2) * (p % 2)
@@ -482,7 +522,7 @@ class MP_STService(Tiling_Strategy_Base):
             for tile_group in tile_pass:
                 tile_group_l = []
                 for (x, y, tile_w, tile_h), steps in tile_group:
-                    tile_mask = self.sts_Service.generateDenoiseMaskforSTStrategy()
+                    tile_mask = self.sts_Service.generateDenoiseMaskforSTStrategy(tile_h, tile_w)
                     tiled_mask = None
                     if noise_mask is not None:
                         tiled_mask = self.tensorService.getSlice(noise_mask, y, tile_h, x, tile_w)
@@ -544,13 +584,13 @@ class RTService(Tiling_Strategy_Base):
     def getNoiseTilesforRTStrategy(self, noise_tensor , tile_positions):
         return self.getTilesfromTilePos(noise_tensor, tile_positions)
     
-    def generateDenoiseMaskforRTStrategy(self,):
-        return None
+    def generateDenoiseMaskforRTStrategy(self, tile_h, tile_w, border_strength=1.0, falloff=0.5 ):
+        return self.generateGenDenoiseMask(tile_h, tile_w, border_strength, falloff)
     
     def getDenoiseMaskTilesforRTStrategy(self, noise_mask, tile_positions, B):
         allTiles = []
         for x, y, tile_w, tile_h in tile_positions:
-            tile_mask = self.generateDenoiseMaskforRTStrategy()
+            tile_mask = self.generateGenDenoiseMask(tile_h, tile_w)
             tiled_mask = None
             if noise_mask is not None:
                 tiled_mask = self.tensorService.getSlice(noise_mask, y, tile_h, x, tile_w)
@@ -621,7 +661,7 @@ class MP_RTService(Tiling_Strategy_Base):
             for tile_group in tile_pass:
                 tile_group_l = []
                 for (x, y, tile_w, tile_h), steps in tile_group:
-                    tile_mask = self.rts_Service.generateDenoiseMaskforRTStrategy()
+                    tile_mask = self.rts_Service.generateGenDenoiseMask(tile_h, tile_w)
                     tiled_mask = None
                     if noise_mask is not None:
                         tiled_mask = self.tensorService.getSlice(noise_mask, y, tile_h, x, tile_w)
@@ -647,6 +687,81 @@ class MP_RTService(Tiling_Strategy_Base):
                 tile_pass_l.append(tile_group_l)
             allTiles.append(tile_pass_l)
         return allTiles
+
+###### Singel Pass - Random Strict Tiling Strategy ######   
+class RTSService(RTService):
+    def __init__(self,):
+        super().__init__()
+
+    def generatePos_forRTSStrategy(self, latent_width: int, latent_height: int, tile_width: int, tile_height: int, seed) -> List[Tuple[int, int, int, int]]:
+        return self.generatePos_forRTStrategy(latent_width, latent_height, tile_width, tile_height, seed)
+    
+    def getTilesforRTSStrategy(self,samples, tile_positions):
+        return self.getTilesforRTStrategy(samples, tile_positions)
+    
+    def getNoiseTilesforRTSStrategy(self, noise_tensor , tile_positions):
+        return self.getNoiseTilesforRTStrategy(noise_tensor, tile_positions)
+    
+    def getDenoiseMaskTilesforRTSStrategy(self, noise_mask, tile_positions, B, latent_height, latent_width):
+        allTiles = []
+        for i, (x, y, tile_w, tile_h) in enumerate(tile_positions):
+            tile_mask = self.generateGenDenoiseMask(tile_h, tile_w)
+            tiled_mask = None
+            if noise_mask is not None:
+                tiled_mask = self.tensorService.getSlice(noise_mask, y, tile_h, x, tile_w)
+            if tile_mask is not None:
+                if tiled_mask is not None:
+                    tiled_mask *= tiled_mask
+                else:
+                    tiled_mask = tile_mask
+            (x, y, tile_w, tile_h), tiled_mask = self.generateMask_atBoundary(y, tile_h, x, tile_w, tile_h, tile_w, latent_height, latent_width, tiled_mask)
+            #tile_positions[i] = (x, y, tile_w, tile_h) I Do not Know wh this Distortes The Image
+            allTiles.append(tiled_mask)
+        return allTiles
+    
+    def getBlendMaskTilesforRTSStrategy(self, tile_positions, B):
+        return self.getBlendMaskTilesforRTStrategy(tile_positions, B)
+
+###### Multi-Pass - Random Strict Tiling Strategy ######   
+class MP_RTSService(MP_RTService):
+
+    def __init__(self, passes=2):
+        super().__init__(passes)
+
+    def generatePos_forMP_RTSStrategy(self, latent_width: int, latent_height: int, tile_width: int, tile_height: int, seed):
+        return self.generatePos_forMP_RTStrategy(latent_width, latent_height, tile_width, tile_height, seed) 
+
+    def getTilesforMP_RTSStrategy(self, samples, tile_pos_and_steps):
+        return self.getTilesforMP_RTStrategy(samples, tile_pos_and_steps)
+    
+    def getNoiseTilesforMP_RTSStrategy(self, noise_tensor , tile_pos_and_steps):
+        return self.getNoiseTilesforMP_RTStrategy(noise_tensor, tile_pos_and_steps)
+    
+    def getDenoiseMaskTilesforMP_RTSStrategy(self, noise_mask, tile_pos_and_steps, B, latent_height, latent_width):
+        allTiles = []
+        for tile_pass in tile_pos_and_steps:
+            tile_pass_l = []
+            for tile_group in tile_pass:
+                tile_group_l = []
+                for i, ((x, y, tile_w, tile_h), steps) in enumerate(tile_group):
+                    tile_mask = self.rts_Service.generateGenDenoiseMask(tile_h, tile_w)
+                    tiled_mask = None
+                    if noise_mask is not None:
+                        tiled_mask = self.tensorService.getSlice(noise_mask, y, tile_h, x, tile_w)
+                    if tile_mask is not None:
+                        if tiled_mask is not None:
+                            tiled_mask *= tiled_mask
+                        else:
+                            tiled_mask = tile_mask 
+                    (x, y, tile_w, tile_h), tiled_mask = self.generateMask_atBoundary(y, tile_h, x, tile_w, tile_h, tile_w, latent_height, latent_width, tiled_mask)
+                    #tile_positions[i] = (x, y, tile_w, tile_h) I Do not Know wh this Distortes The Image
+                    tile_group_l.append(tiled_mask)
+                tile_pass_l.append(tile_group_l)
+            allTiles.append(tile_pass_l)
+        return allTiles
+    
+    def getBlendMaskTilesforMP_RTSStrategy(self, tile_pos_and_steps, B):
+        return self.getBlendMaskTilesforMP_RTStrategy(tile_pos_and_steps, B)
 
 ###### Singel Pass - Padded Tiling Strategy ######
 class PTService(Tiling_Strategy_Base):
@@ -797,20 +912,19 @@ class PTService(Tiling_Strategy_Base):
             else:
                 allTiles.append(comfy.sample.prepare_noise(padded_tile, seed, B))
         return allTiles
-
-    def generateDenoiseMaskforPTStrategy(self,):
-        return None
+    
+    def generateDenoiseMaskforPTStrategy(self, tile_h, tile_w, border_strength=1.0, falloff=0.5 ):
+        return self.generateGenDenoiseMask(tile_h, tile_w, border_strength, falloff)
 
     def getDenoiseMaskTilesforPTStrategy(self, noise_mask, tile_positions, padded_tiles, B):
         allTiles = []
         for (x, y, tile_w, tile_h), padded_tile in zip(tile_positions, padded_tiles):
             padded_h = padded_tile.shape[-2]
             padded_w = padded_tile.shape[-1]
-            tile_mask = self.generateDenoiseMaskforPTStrategy()
+            tile_mask = self.generateDenoiseMaskforPTStrategy(tile_h, tile_w)
             tiled_mask = None
             if noise_mask is not None:
                 tiled_mask = self.tensorService.getSlice(noise_mask, y, tile_h, x, tile_w)
-                tiled_mask = self.generateMask_atBoundary(y, padded_h, x, padded_w, padded_h, padded_w , noise_mask.shape[-2], noise_mask.shape[-1], tiled_mask)
             if tile_mask is not None:
                 if tiled_mask is not None:
                     tiled_mask *= tiled_mask
@@ -832,13 +946,14 @@ class PTService(Tiling_Strategy_Base):
 ###### Multi-Pass - Padded Tiling Strategy ######   
 class MP_PTService(Tiling_Strategy_Base):
 
-    def __init__(self):
+    def __init__(self, passes: int = 2):
         super().__init__()
+        self.passes = passes
 
         # pts - Stands for Padded Tiling Streteg
         self.pts_Service = PTService()
 
-    def generatePos_forMP_PTStrategy(self, latent_width: int, latent_height: int, tile_width: int, tile_height: int, padding: int, passes: int = 2):
+    def generatePos_forMP_PTStrategy(self, latent_width: int, latent_height: int, tile_width: int, tile_height: int, padding: int):
         """
         Generates multiple passes of padded tiling with alternating shifts.
         """
@@ -856,7 +971,7 @@ class MP_PTService(Tiling_Strategy_Base):
 
         passes_list = []
 
-        for p in range(passes):
+        for p in range(self.passes):
             # Create shift for alternating passes
             shift_x = (adjusted_tile_width // 2) * (p % 2)  # Shift every other pass
             shift_y = (adjusted_tile_height // 2) * (p % 2)
@@ -874,8 +989,73 @@ class MP_PTService(Tiling_Strategy_Base):
     def getTilesforMP_PTStrategy(self, samples, tile_pos_and_steps):
         return self.getTilesforMPTilePos(samples, tile_pos_and_steps)
     
-    def getNoiseTilesforMP_PTStrategy(self, noise_tensor , tile_pos_and_steps):
-        return self.getTilesforMPTilePos(noise_tensor, tile_pos_and_steps)
+    def applyPadding_forMP_PTSStrategy(self, tile, padding, strategy, pos_x, pos_y, tile_positions):
+        """
+        Applies padding to a tile using the multi-pass PTS strategy.
+        """
+        # Calculate number of tiles in x and y directions
+        num_tiles_x = max(x + tile_w for (x, _, tile_w, _) in tile_positions) // tile.shape[-1] + 1
+        num_tiles_y = max(y + tile_h for (_, y, _, tile_h) in tile_positions) // tile.shape[-2] + 1
+
+        if padding > 0:
+            left_pad = padding if pos_x != 0 else 0
+            right_pad = padding if pos_x != num_tiles_x - 1 else 0
+            top_pad = padding if pos_y != 0 else 0
+            bottom_pad = padding if pos_y != num_tiles_y - 1 else 0
+
+            if strategy in ["circular", "reflect", "replicate"]:
+                return F.pad(tile, (left_pad, right_pad, top_pad, bottom_pad), mode=strategy)
+            elif strategy == "organic":
+                return self.pts_Service.applyOrganicPadding(tile, (left_pad, right_pad, bottom_pad, top_pad))
+            else:
+                return F.pad(tile, (left_pad, right_pad, top_pad, bottom_pad), mode="constant", value=0)
+
+        return tile
+
+    def getPaddedTilesforMP_PTSStrategy(self, tiled_tiles, tile_pos_and_steps, padding, padding_strategy):
+        """
+        Applies padding to all tiles using the multi-pass PTS strategy.
+        """
+        allTiles = []
+        total_passes = len(tiled_tiles)
+
+        for pass_index, (tile_pass, tiled_tiles_pass) in enumerate(zip(tile_pos_and_steps, tiled_tiles)):
+            tile_pass_l = []
+            for tile_group, tiled_tiles_group in zip(tile_pass, tiled_tiles_pass):
+                tile_positions = [pos for pos, _ in tile_group]  # Extract only positions, ignore steps
+                tile_group_l = []
+                for ((x, y, tile_w, tile_h), _), tile in zip(tile_group, tiled_tiles_group):  # Skip steps
+                    pos_x = x // tile.shape[-1]  # Calculate actual tile X index
+                    pos_y = y // tile.shape[-2]  # Calculate actual tile Y index
+
+                    padded_tile = self.applyPadding_forMP_PTSStrategy(
+                        tile, padding, padding_strategy, pos_x, pos_y, tile_positions
+                    )
+                    tile_group_l.append(padded_tile)
+                tile_pass_l.append(tile_group_l)
+            allTiles.append(tile_pass_l)
+
+        return allTiles
+    
+    def getNoiseTilesforMP_PTStrategy(self, latent, padded_tiles, seed, disable_noise: bool):
+        samples = latent.get("samples")
+        shape = samples.shape
+        B, C, H, W = shape
+        allTiles = []
+        for padded_tiles_pass in padded_tiles:
+            tile_pass_l = []
+            for padded_tiles_group in padded_tiles_pass:
+                tile_group_l = []
+                for padded_tile in padded_tiles_group:
+                    tile_shape = padded_tile.shape
+                    x, y, h, w = tile_shape
+                    if disable_noise:
+                        tile_group_l.append(torch.zeros((B, C, h, w), dtype=samples.dtype, layout=samples.layout, device="cpu"))
+                    else:
+                        tile_group_l.append(comfy.sample.prepare_noise(padded_tile, seed, B))
+                tile_pass_l.append(tile_group_l)
+            allTiles.append(tile_pass_l)
+        return allTiles
     
     def getDenoiseMaskTilesforMP_PTStrategy(self, noise_mask, tile_pos_and_steps, B):
         allTiles = []
@@ -884,7 +1064,7 @@ class MP_PTService(Tiling_Strategy_Base):
             for tile_group in tile_pass:
                 tile_group_l = []
                 for (x, y, tile_w, tile_h), steps in tile_group:
-                    tile_mask = self.pts_Service.generateDenoiseMaskforPTStrategy()
+                    tile_mask = self.pts_Service.generateDenoiseMaskforPTStrategy(tile_h, tile_w)
                     tiled_mask = None
                     if noise_mask is not None:
                         tiled_mask = self.tensorService.getSlice(noise_mask, y, tile_h, x, tile_w)
@@ -898,15 +1078,16 @@ class MP_PTService(Tiling_Strategy_Base):
             allTiles.append(tile_pass_l)
         return allTiles
     
-    def getBlendMaskTilesforMP_PTStrategy(self, tile_pos_and_steps, B):
+    def getBlendMaskTilesforMP_PTStrategy(self, padded_tiles, B):
         allTiles = []
-        for tile_pass in tile_pos_and_steps:
+        for padded_tiles_pass in padded_tiles:
             tile_pass_l = []
-            for tile_group in tile_pass:
+            for padded_tiles_group in padded_tiles_pass:
                 tile_group_l = []
-                for (x, y, tile_w, tile_h), steps in tile_group:
-                    blend_mask = self.generateGenBlendMask(B, tile_h, tile_w)
-                    tile_group_l.append(blend_mask)
+                for padded_tile in padded_tiles_group:
+                    tile_shape = padded_tile.shape
+                    x, y, h, w = tile_shape
+                    tile_group_l.append(self.generateGenBlendMask(B, h, w))
                 tile_pass_l.append(tile_group_l)
             allTiles.append(tile_pass_l)
         return allTiles
@@ -1000,18 +1181,17 @@ class CPTService(Tiling_Strategy_Base):
     
     def getDenoiseMaskTilesforCPTStrategy(self, noise_mask, tile_positions, B, latent_height, latent_width):
         allTiles = []
-        for x, y, tile_w, tile_h in tile_positions:
+        for i, (x, y, tile_w, tile_h) in enumerate(tile_positions):  # 🔹 Track index
             masks = self.generatePaddedMasks((x, y, tile_w, tile_h), B)
             tile_mask = self.getTileMask((x, y, tile_w, tile_h), masks, latent_height, latent_width)
             tiled_mask = None
             if noise_mask is not None:
                 tiled_mask = self.tensorService.getSlice(noise_mask, y, tile_h, x, tile_w)
-                tiled_mask = self.generateMask_atBoundary(y, tile_h, x, tile_w, tile_h, tile_w , noise_mask.shape[-2], noise_mask.shape[-1], tiled_mask)
             if tile_mask is not None:
-                if tiled_mask is not None:
-                    tiled_mask *= tiled_mask
-                else:
-                    tiled_mask = tile_mask
+                tiled_mask = tiled_mask * tile_mask if tiled_mask is not None else tile_mask
+            
+            (x, y, tile_w, tile_h), tiled_mask = self.generateMask_atBoundary(y, tile_h, x, tile_w, tile_h, tile_w, latent_height, latent_width, tiled_mask)
+            tile_positions[i] = (x, y, tile_w, tile_h)
             allTiles.append(tiled_mask)
         return allTiles
     
@@ -1032,8 +1212,8 @@ class MP_CPTService(Tiling_Strategy_Base):
 
 
     def generatePos_forMP_CPTStrategy(self, latent_width: int, latent_height: int, tile_width: int, tile_height: int, steps):
-        tile_size_h = min(latent_height, max(4, (tile_width // 4) * 4))  # Use tile_width
-        tile_size_w = min(latent_width, max(4, (tile_height // 4) * 4))  # Use tile_height
+        tile_size_h = min(latent_height, max(4, (tile_width // 4) * 4))
+        tile_size_w = min(latent_width, max(4, (tile_height // 4) * 4))
 
         h = np.arange(0, latent_height, tile_size_h)
         h_shift = np.arange(tile_size_h // 2, latent_height - tile_size_h // 2, tile_size_h)
@@ -1068,19 +1248,18 @@ class MP_CPTService(Tiling_Strategy_Base):
             tile_pass_l = []
             for tile_group in tile_pass:
                 tile_group_l = []
-                for (x, y, tile_w, tile_h), steps in tile_group:
+                for i, ((x, y, tile_w, tile_h), steps) in enumerate(tile_group):  # 🔹 Track index
                     masks = self.cpts_Service.generatePaddedMasks((x, y, tile_w, tile_h), B)
                     tile_mask = self.cpts_Service.getTileMask((x, y, tile_w, tile_h), masks, latent_height, latent_width)
                     tiled_mask = None
                     if noise_mask is not None:
                         tiled_mask = self.tensorService.getSlice(noise_mask, y, tile_h, x, tile_w)
-                        tiled_mask = self.generateMask_atBoundary(y, tile_h, x, tile_w, tile_h, tile_w , noise_mask.shape[-2], noise_mask.shape[-1], tiled_mask)
                     if tile_mask is not None:
-                        if tiled_mask is not None:
-                            tiled_mask *= tiled_mask
-                        else:
-                            tiled_mask = tile_mask
-            
+                        tiled_mask = tiled_mask * tile_mask if tiled_mask is not None else tile_mask
+                    
+                    (x, y, tile_w, tile_h), tiled_mask = self.generateMask_atBoundary(y, tile_h, x, tile_w, tile_h, tile_w, latent_height, latent_width, tiled_mask)
+                    tile_group[i] = ((x, y, tile_w, tile_h), steps)
+
                     tile_group_l.append(tiled_mask)
                 tile_pass_l.append(tile_group_l)
             allTiles.append(tile_pass_l)
@@ -1104,19 +1283,23 @@ class TilingService(Tiling_Strategy_Base):
     def __init__(self):
         super().__init__()
 
-        # sts - Stands for Simple Tiling Streteg
+        # sts - Stands for Simple Tiling Strategy
         self.sts_Service = STService()
-        # rts - Stands for Random Tiling Streteg
+        # rts - Stands for Random Tiling Strategy
         self.rts_Service = RTService()
-        # pts - Stands for Padded Tiling Streteg
+        # rtss - Stands for Random Strict Tiling Strategy
+        self.rtss_Service = RTSService()
+        # pts - Stands for Padded Tiling Strategy
         self.pts_Service = PTService()
-        # cpts - Stands for Context-Padded Tiling Stretegy
+        # cpts - Stands for Context-Padded Tiling Strategy
         self.cpts_Service = CPTService()
         
         # mp_st - Stands for Multi-Pass Simple Tiling Strategy
         self.mp_st_Service = MP_STService()
         # mp_rt - Stands for Multi-Pass Random Tiling Strategy
         self.mp_rt_Service = MP_RTService()
+        # mp_rts - Stands for Random Strict Tiling Strategy
+        self.mp_rts_Service = MP_RTSService()
         # mp_pt - Stands for Multi-Pass Padding Tiling Strategy
         self.mp_pt_Service = MP_PTService()
         # mp_cpt - Stands for Multi-Pass Context-Padded Tiling Stretegy
@@ -1125,7 +1308,6 @@ class TilingService(Tiling_Strategy_Base):
 class LatentTiler:
 
     def __init__(self):
-        self.tensorService = TensorService()
         self.tilingService = TilingService()
         self.conditionService = Condition_Service()
         self.conrolNetService = ControlNetService()
@@ -1202,6 +1384,12 @@ class LatentTiler:
                 tiled_noise_tiles = self.tilingService.rts_Service.getNoiseTilesforRTStrategy(noise, tiled_positions)
                 tiled_denoise_masks = self.tilingService.rts_Service.getDenoiseMaskTilesforRTStrategy(noise_mask, tiled_positions, B)
                 tiled_blend_masks = self.tilingService.rts_Service.getBlendMaskTilesforRTStrategy(tiled_positions, B)
+            elif tiling_strategy == "random_strict":
+                tiled_positions = self.tilingService.rtss_Service.generatePos_forRTSStrategy(W, H, tile_width, tile_height, seed)
+                tiled_tiles = self.tilingService.rtss_Service.getTilesforRTSStrategy(samples, tiled_positions)
+                tiled_noise_tiles = self.tilingService.rtss_Service.getNoiseTilesforRTSStrategy(noise, tiled_positions)
+                tiled_denoise_masks = self.tilingService.rtss_Service.getDenoiseMaskTilesforRTSStrategy(noise_mask, tiled_positions, B, H, W)
+                tiled_blend_masks = self.tilingService.rtss_Service.getBlendMaskTilesforRTSStrategy(tiled_positions, B)
             elif tiling_strategy == "padded":
                 tiled_positions = self.tilingService.pts_Service.generatePos_forPTStrategy(W, H, tile_width, tile_height, padding)
                 tiled_tiles = self.tilingService.pts_Service.getTilesforPTStrategy(samples, tiled_positions)
@@ -1211,9 +1399,9 @@ class LatentTiler:
                 tiled_blend_masks = self.tilingService.pts_Service.getBlendMaskTilesforPTStrategy(tiled_positions, tiled_tiles, B)
             elif tiling_strategy == "context_padded":
                 tiled_positions = self.tilingService.cpts_Service.generatePos_forCPTStrategy(W, H, tile_width, tile_height)
+                tiled_denoise_masks = self.tilingService.cpts_Service.getDenoiseMaskTilesforCPTStrategy(noise_mask, tiled_positions, B, H, W)
                 tiled_tiles = self.tilingService.cpts_Service.getTilesforCPTStrategy(samples, tiled_positions)
                 tiled_noise_tiles = self.tilingService.cpts_Service.getNoiseTilesforCPTStrategy(noise, tiled_positions)
-                tiled_denoise_masks = self.tilingService.cpts_Service.getDenoiseMaskTilesforCPTStrategy(noise_mask, tiled_positions, B, H, W)
                 tiled_blend_masks = self.tilingService.cpts_Service.getBlendeMaskTilesforCPTStrategy(tiled_positions, B)
         elif tiling_mode == "multi_pass":
             if tiling_strategy == "simple":
@@ -1228,17 +1416,24 @@ class LatentTiler:
                 tiled_noise_tiles = self.tilingService.mp_rt_Service.getNoiseTilesforMP_RTStrategy(noise, tile_pos_and_steps)
                 tiled_denoise_masks = self.tilingService.mp_rt_Service.getDenoiseMaskTilesforMP_RTStrategy(noise_mask, tile_pos_and_steps, B)
                 tiled_blend_masks = self.tilingService.mp_rt_Service.getBlendMaskTilesforMP_RTStrategy(tile_pos_and_steps, B)
+            elif tiling_strategy == "random_strict":
+                tile_pos_and_steps = self.tilingService.mp_rts_Service.generatePos_forMP_RTSStrategy(W, H, tile_width, tile_height, seed)
+                tiled_tiles = self.tilingService.mp_rts_Service.getTilesforMP_RTSStrategy(samples, tile_pos_and_steps)
+                tiled_noise_tiles = self.tilingService.mp_rts_Service.getNoiseTilesforMP_RTSStrategy(noise, tile_pos_and_steps)
+                tiled_denoise_masks = self.tilingService.mp_rts_Service.getDenoiseMaskTilesforMP_RTSStrategy(noise_mask, tile_pos_and_steps, B, H, W)
+                tiled_blend_masks = self.tilingService.mp_rts_Service.getBlendMaskTilesforMP_RTSStrategy(tile_pos_and_steps, B)
             elif tiling_strategy == "padded":
                 tile_pos_and_steps = self.tilingService.mp_pt_Service.generatePos_forMP_PTStrategy(W, H, tile_width, tile_height, padding)
                 tiled_tiles = self.tilingService.mp_pt_Service.getTilesforMP_PTStrategy(samples, tile_pos_and_steps)
-                tiled_noise_tiles = self.tilingService.mp_pt_Service.getNoiseTilesforMP_PTStrategy(noise, tile_pos_and_steps)
+                tiled_tiles = self.tilingService.mp_pt_Service.getPaddedTilesforMP_PTSStrategy(tiled_tiles, tile_pos_and_steps, padding, padding_strategy)
+                tiled_noise_tiles = self.tilingService.mp_pt_Service.getNoiseTilesforMP_PTStrategy(latent_image, tiled_tiles, seed, disable_noise)
                 tiled_denoise_masks = self.tilingService.mp_pt_Service.getDenoiseMaskTilesforMP_PTStrategy(noise_mask, tile_pos_and_steps, B)
-                tiled_blend_masks = self.tilingService.mp_pt_Service.getBlendMaskTilesforMP_PTStrategy(tile_pos_and_steps, B)
+                tiled_blend_masks = self.tilingService.mp_pt_Service.getBlendMaskTilesforMP_PTStrategy(tiled_tiles, B)
             elif tiling_strategy == "context_padded":
                 tile_pos_and_steps = self.tilingService.mp_cpt_Service.generatePos_forMP_CPTStrategy(W, H, tile_width, tile_height, steps)
+                tiled_denoise_masks = self.tilingService.mp_cpt_Service.getDenoiseMaskTilesforMP_CPTStrategy(noise_mask, tile_pos_and_steps, B, H, W)
                 tiled_tiles = self.tilingService.mp_cpt_Service.getTilesforMP_CPTStrategy(samples, tile_pos_and_steps)
                 tiled_noise_tiles = self.tilingService.mp_cpt_Service.getNoiseTilesforMP_CPTStrategy(noise, tile_pos_and_steps)
-                tiled_denoise_masks = self.tilingService.mp_cpt_Service.getDenoiseMaskTilesforMP_CPTStrategy(noise_mask, tile_pos_and_steps, B, H, W)
                 tiled_blend_masks = self.tilingService.mp_cpt_Service.getBlendeMaskTilesforMP_CPTStrategy(tile_pos_and_steps, B)
         else:
             raise ValueError("[EUP - Latent Tiler]: Warning: Invalid Tiling Mode. Please select a valid Tiling Mode.")
@@ -1324,7 +1519,7 @@ class LatentTiler:
 
 class LatentMerger:
     def __init__(self):
-        self.tensorService = TensorService()
+        pass
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -1597,9 +1792,10 @@ class TKS_Base:
                 tile_group_l = []
                 for tile_index, tile_data in enumerate(tile_group):
                     tile, tile_position, noise_tile, denoise_mask, blend_mask, mp, mn, tile_steps = tile_data
-                    #print("Tile Shape : ", tile.shape)
-                    #print("Noise Tile Shape : ", noise_tile.shape)
-                    #print("Noise Mask Shape : ", denoise_mask.shape)
+                    print("Tile Shape : ", tile.shape)
+                    print("Noise Tile Shape : ", noise_tile.shape)
+                    #print("Denoise Mask Shape : ", denoise_mask.shape)
+                    print("Blend Mask Shape : ", blend_mask.shape)
                     processed_tile = sampler.sample(
                         noise=noise_tile, 
                         positive=mp, 
