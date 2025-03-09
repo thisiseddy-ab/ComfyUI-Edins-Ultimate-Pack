@@ -1302,23 +1302,19 @@ class LatentMerger:
         }
 
     INPUT_IS_LIST = (True,)
+
     CATEGORY = "EUP - Ultimate Pack/latent"
+    
     RETURN_TYPES = ("LATENT",)
     OUTPUT_TOOLTIPS = ("The merged latent.",)
     FUNCTION = "mergeTiles"
 
     def mergeTiles(self, proc_tiled_latent):
-        if len(proc_tiled_latent) == 1:
-            return self.mergeSinglePass(proc_tiled_latent)
-        else:
-            return self.mergeMultiPass(proc_tiled_latent)
-
-    def mergeSinglePass(self, passes):
         # List to hold all tiles from all passes
         all_tile_data = []
 
         # Collect all tiles, positions, and masks from each pass
-        for pass_index, pass_data in enumerate(passes):
+        for pass_data in proc_tiled_latent:
             latent_tiles, tile_positions, noise_masks = self.unpackTiles(pass_data)
 
             # Combine the tiles, positions, and masks into one list of tuples
@@ -1331,31 +1327,9 @@ class LatentMerger:
         # Normalize the result
         weight_map = torch.clamp(weight_map, min=1e-6)  # Avoid division by zero
         merged_samples /= weight_map
+
+        return ({"samples": merged_samples},)
         
-        return ({"samples": merged_samples},)
-
-    def mergeMultiPass(self, passes):
-        # List to hold all tiles from all passes
-        all_tile_data = []
-
-        # Collect all tiles, positions, and masks from each pass
-        for pass_index, pass_data in enumerate(passes):
-            latent_tiles, tile_positions, noise_masks = self.unpackTiles(pass_data)
-
-            # Combine the tiles, positions, and masks into one list of tuples
-            tile_data = [(tile, pos, mask) for tile, pos, mask in zip(latent_tiles, tile_positions, noise_masks)]
-            all_tile_data.extend(tile_data)  # Add all tiles to the combined list
-
-        # Perform the merging for all passes at once
-        merged_samples, weight_map = self.performMerging(all_tile_data)
-
-        # Normalize the result
-        weight_map = torch.clamp(weight_map, min=1e-6)  # Avoid division by zero
-        merged_samples /= weight_map
-
-        return ({"samples": merged_samples},)
-
-
     def performMerging(self, all_tile_data):
         """
         Perform merging of all tiles from all passes in one step.
@@ -1379,18 +1353,6 @@ class LatentMerger:
 
         return merged_samples, weight_map
 
-    def processTileandMask(self, tile, mask, device):
-        # Ensure the tensors are on the same device
-        tile = tile.to(device)
-        if tile.dim() == 3:
-            tile = tile.unsqueeze(0)
-        if tile.shape[1] == 3:
-            tile = torch.cat([tile, torch.zeros((tile.shape[0], 1, tile.shape[2], tile.shape[3]), device=device)], dim=1)
-        mask = mask.to(device)
-        if mask.dim() == 3:
-            mask = mask.unsqueeze(0)
-        return tile, mask
-
     def applyTiletoMerged(self, merged_samples, weight_map, tile, mask, x, y, w, h):
         # Ensure all tensors are on the same device
         device = merged_samples.device  # Get the device of merged_samples
@@ -1413,6 +1375,18 @@ class LatentMerger:
         if valid_tile_h == 0 or valid_tile_w == 0:
             raise ValueError(f"Invalid tile dimensions: {valid_tile_h}, {valid_tile_w}")
         return tile[:, :, :valid_tile_h, :valid_tile_w], mask[:, :, :valid_mask_h, :valid_mask_w]
+    
+    def processTileandMask(self, tile, mask, device):
+        # Ensure the tensors are on the same device
+        tile = tile.to(device)
+        if tile.dim() == 3:
+            tile = tile.unsqueeze(0)
+        if tile.shape[1] == 3:
+            tile = torch.cat([tile, torch.zeros((tile.shape[0], 1, tile.shape[2], tile.shape[3]), device=device)], dim=1)
+        mask = mask.to(device)
+        if mask.dim() == 3:
+            mask = mask.unsqueeze(0)
+        return tile, mask
 
     def unpackTiles(self, pass_data):
         latent_tiles = []
@@ -1450,21 +1424,12 @@ class TKS_Base:
 
         sampler = comfy.samplers.KSampler(model, steps=steps, device=device, sampler=sampler_name, scheduler=scheduler, denoise=denoise, model_options=model.model_options)
         
-        isSinglePass = len(tiled_latent) == 1
         total_tiles = sum(len(tile_group) for tile_pass in tiled_latent for tile_group in tile_pass)
         total_steps = steps * total_tiles
         
         with tqdm(total=total_steps) as pbar_tqdm:
-            if tiling_mode == "single_pass":
-                '''
-                proc_tiled_latent = self.sampleTilesforSinglePassMode(sampler, tiled_latent, steps, total_steps, total_tiles, pbar_tqdm, disable_pbar,
-                                                                    previewer, cfg, start_step, last_step, force_full_denoise, seed, denoise)
-                '''
-                proc_tiled_latent = self.sampleTilesforMultiPassMode(sampler, tiled_latent, steps, total_steps, total_tiles, pbar_tqdm, disable_pbar, 
-                                                                    previewer, cfg, start_step, last_step, force_full_denoise, seed, denoise)
-            elif tiling_mode == "multi_pass":
-                proc_tiled_latent = self.sampleTilesforMultiPassMode(sampler, tiled_latent, steps, total_steps, total_tiles, pbar_tqdm, disable_pbar, 
-                                                                    previewer, cfg, start_step, last_step, force_full_denoise, seed, denoise)
+            proc_tiled_latent = self.sampleTiles(sampler, tiled_latent, steps, total_steps, total_tiles, pbar_tqdm, disable_pbar, 
+                                                    previewer, cfg, start_step, last_step, force_full_denoise, seed, denoise)
             
 
         # Step 4: Merge Tiles
@@ -1475,7 +1440,7 @@ class TKS_Base:
         out["samples"] = merged_latent[0].get("samples")
         return (out, )
     
-    def sampleTilesforSinglePassMode(self, sampler : comfy.samplers.KSampler, tiled_latent, steps, total_steps, total_tiles, 
+    def sampleTiles(self, sampler : comfy.samplers.KSampler, tiled_latent, steps, total_steps, total_tiles, 
             pbar_tqdm, disable_pbar, previewer, cfg, start_step, last_step, force_full_denoise, seed, denoise):
         
         pbar = comfy.utils.ProgressBar(steps)
@@ -1500,61 +1465,6 @@ class TKS_Base:
 
                     # Update the progress bar with the preview image (optional)
                     pbar.update_absolute(step, preview=preview_bytes)
-
-        proc_tiled_latent = []
-        for tile_pass in tiled_latent:
-            tile_pass_l = []
-            for tile_group in tile_pass:
-                tile_group_l = []
-                for tile_index, tile_data in enumerate(tile_group):
-                    tile, tile_position, noise_tile, denoise_mask, blend_mask, mp, mn, tile_steps = tile_data
-                    processed_tile = sampler.sample(
-                        noise=noise_tile, 
-                        positive=mp, 
-                        negative=mn, 
-                        cfg=cfg, 
-                        latent_image=tile, 
-                        start_step=start_step, 
-                        last_step=last_step,
-                        force_full_denoise=force_full_denoise,
-                        denoise_mask=denoise_mask, 
-                        callback=lambda step, x0, x, total_steps=total_steps, tile_index=tile_index: update_progress(step, x0, x, total_steps, tile_index), 
-                        disable_pbar=disable_pbar, 
-                        seed=seed
-                    )
-                    # Store processed tile
-                    tile_group_l.append((processed_tile, tile_position, blend_mask))
-                tile_pass_l.append(tile_group_l)
-            proc_tiled_latent.append(tile_pass_l)
-        return proc_tiled_latent
-    
-    def sampleTilesforMultiPassMode(self, sampler : comfy.samplers.KSampler, tiled_latent, steps, total_steps, total_tiles, 
-            pbar_tqdm, disable_pbar, previewer, cfg, start_step, last_step, force_full_denoise, seed, denoise):
-        
-        pbar = comfy.utils.ProgressBar(steps)
-        
-        def update_progress(step, x0, x, total_steps, tile_index):
-                # Update the overall progress bar
-                pbar_tqdm.update(1)
-
-                # Update tile-specific progress
-                if not disable_pbar:
-                    preview_bytes = None
-                    if previewer:
-                        preview_bytes = previewer.decode_latent_to_preview_image("JPEG", x0)
-
-                    pbar_tqdm.set_description(f"[EUP - Tiled KSampler]")
-                    
-                    # Update the postfix with correct total and tile progress
-                    postfix = {
-                        "Tile Progress": f"Tile {tile_index + 1}/{total_tiles}" 
-                    }
-                    pbar_tqdm.set_postfix(postfix)
-
-                    # Update the progress bar with the preview image (optional)
-                    pbar.update_absolute(step, preview=preview_bytes)
-        
-        
         
         proc_tiled_latent = []
         for tile_pass in tiled_latent:
