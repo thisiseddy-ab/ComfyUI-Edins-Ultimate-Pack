@@ -1430,8 +1430,6 @@ class TKS_Base:
         with tqdm(total=total_steps) as pbar_tqdm:
             proc_tiled_latent = self.sampleTiles(sampler, tiled_latent, steps, total_steps, total_tiles, pbar_tqdm, disable_pbar, 
                                                     previewer, cfg, start_step, last_step, force_full_denoise, seed, denoise)
-            
-
         # Step 4: Merge Tiles
         merger = LatentMerger()
         merged_latent = merger.mergeTiles(proc_tiled_latent)
