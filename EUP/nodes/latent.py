@@ -1189,6 +1189,7 @@ class LatentTiler:
         noise = self.tilingService.generateRandomNoise(latent_image, seed, disable_noise)
         noise_mask = self.tilingService.generateNoiseMask(latent_image, noise)
 
+        #### Chosing Tiling Strategy ####
         if tiling_mode == "single_pass":
             if tiling_strategy == "simple":
                 tiled_positions = self.tilingService.st_Service.generatePos_forSTStrategy(W, H, tile_width, tile_height)
@@ -1248,50 +1249,10 @@ class LatentTiler:
         else:
             raise ValueError("[EUP - Latent Tiler]: Warning: Invalid Tiling Mode. Please select a valid Tiling Mode.")
 
-        if tiling_mode == "single_pass":
-            return self.prepareTilesforMultiPassMode(positive, negative, shape, samples, tiled_positions, tiled_tiles, tiled_noise_tiles, tiled_denoise_masks, tiled_blend_masks)
-            #return self.prepareTilesforSingelPassMode(positive, negative, shape, samples, tiled_positions, tiled_tiles, tiled_noise_tiles, tiled_denoise_masks, tiled_blend_masks)
-        elif tiling_mode == "multi_pass":
-            return self.prepareTilesforMultiPassMode(positive, negative, shape, samples, tiled_positions, tiled_tiles, tiled_noise_tiles, tiled_denoise_masks, tiled_blend_masks)
+        #### Prepare the tiles for sampling ####
+        return self.prepareTilesforSampling(positive, negative, shape, samples, tiled_positions, tiled_tiles, tiled_noise_tiles, tiled_denoise_masks, tiled_blend_masks) 
     
-    def prepareTilesforSingelPassMode(self, positive, negative, shape, samples, tiled_positions, tiled_tiles, tiled_noise_tiles, tiled_denoise_masks, tiled_blend_masks):
-
-        # Extract and prepare cnets, T2Is, gligen, and spatial conditions
-        cnets = self.conrolNetService.extractCnet(positive, negative)
-        cnet_imgs = self.conrolNetService.prepareCnet_imgs(cnets, shape)
-        T2Is = self.t2iService.extract_T2I(positive, negative)
-        T2I_imgs = self.t2iService.prepareT2I_imgs(T2Is, shape)
-        gligen_pos, gligen_neg = self.gligenService.extractGligen(positive, negative)
-        sptcond_pos, sptcond_neg = self.conditionService.sptcondService.extractSpatialConds(positive, negative, shape, samples.device)
-
-        tiled_latent = []
-        tile_pass_l = []
-        tile_group_l = []
-        for (x, y, tile_w, tile_h), tile, noise_tile, denoise_mask, blend_mask in zip(tiled_positions, tiled_tiles, tiled_noise_tiles, tiled_denoise_masks, tiled_blend_masks):
-            
-            # Copy positive and negative lists for modification
-            pos = [c.copy() for c in positive]
-            neg = [c.copy() for c in negative]
-
-            #### Slice cnets, T2Is, gligen, and spatial conditions for the current tile ####
-            ## Slice CNETS ##
-            pos, neg, self.conrolNetService.prepareSlicedCnets(pos, neg, cnets, cnet_imgs, y, tile_h, x, tile_w)
-            ## Slice T2Is ##
-            pos, neg = self.t2iService.prepareSlicedT2Is(pos, neg, T2Is, T2I_imgs, y, tile_h, x, tile_w)
-
-            ## Slice Spatial Conditions  ##
-            pos, neg = self.conditionService.sptcondService.prepareSlicedConds(pos, neg, sptcond_pos, sptcond_neg, y, tile_h, x, tile_w)
-
-            # Slice GLIGEN ##
-            pos, neg = self.gligenService.prepsreSlicedGligen(pos, neg, gligen_pos, gligen_neg, y, tile_h, x, tile_w)
-            tile_group_l.append((tile, (x, y, tile_w, tile_h), noise_tile, denoise_mask, blend_mask, pos, neg, None))
-        
-        tile_pass_l.append(tile_group_l)
-        tiled_latent.append(tile_pass_l)
-        return tiled_latent
-        
-    
-    def prepareTilesforMultiPassMode(self, positive, negative, shape, samples, tiled_positions, tiled_tiles, tiled_noise_tiles, tiled_denoise_masks, tiled_blend_masks):
+    def prepareTilesforSampling(self, positive, negative, shape, samples, tiled_positions, tiled_tiles, tiled_noise_tiles, tiled_denoise_masks, tiled_blend_masks):
         # Extract and prepare cnets, T2Is, gligen, and spatial conditions
         cnets = self.conrolNetService.extractCnet(positive, negative)
         cnet_imgs = self.conrolNetService.prepareCnet_imgs(cnets, shape)
