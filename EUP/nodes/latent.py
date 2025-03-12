@@ -394,6 +394,37 @@ class Tiling_Strategy_Base():
         new_mask[:, :, -h_offset:h_len if h_offset == 0 else tile_h, -w_offset:w_len if w_offset == 0 else tile_w] = 1.0 if mask is None else mask
         
         return ((w + w_offset, h + h_offset, tile_w, tile_h), new_mask)
+
+    def getDenoiseMaskTiles(self, noise_mask, tile_pos,):
+        allTiles = []
+        for tile_pos_pass in tile_pos:
+            tile_pass_l = []
+            for tile_pos_group in tile_pos_pass:
+                tile_group_l = []
+                for (x, y, tile_w, tile_h) in tile_pos_group:
+                    tile_mask = self.generateGenDenoiseMask(tile_h, tile_w)
+                    tiled_mask = None
+                    if noise_mask is not None:
+                        tiled_mask = self.tensorService.getSlice(noise_mask, y, tile_h, x, tile_w)
+                    if tile_mask is not None:
+                        tiled_mask = tiled_mask * tile_mask if tiled_mask is not None else tile_mask
+                    tile_group_l.append(tiled_mask)
+                tile_pass_l.append(tile_group_l)
+            allTiles.append(tile_pass_l)
+        return allTiles
+
+    def getBlendMaskTiles(self, tile_pos, B):
+        allTiles = []
+        for t_pos_pass in tile_pos:
+            tile_pass_l = []
+            for t_pos_group in t_pos_pass:
+                tile_group_l = []
+                for (x, y, tile_w, tile_h) in t_pos_group:
+                    blend_mask = self.generateGenBlendMask(B, tile_h, tile_w)
+                    tile_group_l.append(blend_mask)
+                tile_pass_l.append(tile_group_l)
+            allTiles.append(tile_pass_l)
+        return allTiles
     
 ###### Singel Pass - Simple Tiling Strategy ######  
 class STService(Tiling_Strategy_Base):
@@ -432,38 +463,10 @@ class STService(Tiling_Strategy_Base):
         return self.generateGenDenoiseMask(tile_h, tile_w, border_strength, falloff)
     
     def getDenoiseMaskTilesforSTStrategy(self, noise_mask, tile_pos):
-        allTiles = []
-        for t_pos_pass in tile_pos:
-            tile_pass_l = []
-            for t_pos_group in t_pos_pass:
-                tile_group_l = []
-                for (x, y, tile_w, tile_h) in t_pos_group:
-                    tile_mask = self.generateDenoiseMaskforSTStrategy(tile_h, tile_w)
-                    tiled_mask = None
-                    if noise_mask is not None:
-                        tiled_mask = self.tensorService.getSlice(noise_mask, y, tile_h, x, tile_w)
-                    if tile_mask is not None:
-                        if tiled_mask is not None:
-                            tiled_mask *= tiled_mask
-                        else:
-                            tiled_mask = tile_mask      
-                    tile_group_l.append(tiled_mask)
-                tile_pass_l.append(tile_group_l)
-            allTiles.append(tile_pass_l)
-        return allTiles
+        return self.getDenoiseMaskTiles(noise_mask, tile_pos)
 
     def getBlendMaskTilesforSTStrategy(self, tile_pos, B):
-        allTiles = []
-        for t_pos_pass in tile_pos:
-            tile_pass_l = []
-            for t_pos_group in t_pos_pass:
-                tile_group_l = []
-                for (x, y, tile_w, tile_h) in t_pos_group:
-                    blend_mask = self.generateGenBlendMask(B, tile_h, tile_w)
-                    tile_group_l.append(blend_mask)
-                tile_pass_l.append(tile_group_l)
-            allTiles.append(tile_pass_l)
-        return allTiles
+        return self.getBlendMaskTiles(tile_pos, B)
     
 ###### Multi-Pass - Simple Tiling Strategy ######   
 class MP_STService(Tiling_Strategy_Base):
@@ -611,17 +614,7 @@ class RTService(Tiling_Strategy_Base):
         return allTiles
     
     def getBlendMaskTilesforRTStrategy(self, tile_pos, B):
-        allTiles = []
-        for tile_pos_pass in tile_pos:
-            tile_pass_l = []
-            for tile_pos_group in tile_pos_pass:
-                tile_group_l = []
-                for (x, y, tile_w, tile_h) in tile_pos_group:
-                    blend_mask = self.generateGenBlendMask(B, tile_h, tile_w)
-                    tile_group_l.append(blend_mask)
-                tile_pass_l.append(tile_group_l)
-            allTiles.append(tile_pass_l)
-        return allTiles
+        return self.getBlendMaskTiles(tile_pos, B)
     
 ###### Multi-Pass - Random Tiling Strategy ######   
 class MP_RTService(Tiling_Strategy_Base):
@@ -1200,17 +1193,7 @@ class CPTService(Tiling_Strategy_Base):
         return allTiles
     
     def getBlendeMaskTilesforCPTStrategy(self, tile_pos, B):
-        allTiles = []
-        for tile_pos_pass in tile_pos:
-            tile_pass_l = []
-            for tile_pos_group in tile_pos_pass:
-                tile_group_l = []
-                for (x, y, tile_w, tile_h) in tile_pos_group:
-                    blend_mask = self.generateGenBlendMask(B, tile_h, tile_w)
-                    tile_group_l.append(blend_mask)
-                tile_pass_l.append(tile_group_l)
-            allTiles.append(tile_pass_l)
-        return allTiles
+        return self.getBlendMaskTiles(tile_pos, B)
 
 ###### Multi-Pass - Context-Padded Tiling Strategy ######   
 class MP_CPTService(Tiling_Strategy_Base):
@@ -1310,35 +1293,10 @@ class OVPStrategy(Tiling_Strategy_Base):
         return self.getTilesfromTilePos(noise_tensor, tile_positions)
     
     def getDenoiseMaskTilesforOVPStrategy(self, noise_mask, tile_pos,):
-        allTiles = []
-        for tile_pos_pass in tile_pos:
-            tile_pass_l = []
-            for tile_pos_group in tile_pos_pass:
-                tile_group_l = []
-                for (x, y, tile_w, tile_h) in tile_pos_group:
-                    tile_mask = self.generateGenDenoiseMask(tile_h, tile_w)
-                    tiled_mask = None
-                    if noise_mask is not None:
-                        tiled_mask = self.tensorService.getSlice(noise_mask, y, tile_h, x, tile_w)
-                    if tile_mask is not None:
-                        tiled_mask = tiled_mask * tile_mask if tiled_mask is not None else tile_mask
-                    tile_group_l.append(tiled_mask)
-                tile_pass_l.append(tile_group_l)
-            allTiles.append(tile_pass_l)
-        return allTiles
+        return self.getDenoiseMaskTiles(noise_mask, tile_pos)
     
     def getBlendeMaskTilesforOVPStrategy(self, tile_pos, B):
-        allTiles = []
-        for tile_pos_pass in tile_pos:
-            tile_pass_l = []
-            for tile_pos_group in tile_pos_pass:
-                tile_group_l = []
-                for (x, y, tile_w, tile_h) in tile_pos_group:
-                    blend_mask = self.generateGenBlendMask(B, tile_h, tile_w)
-                    tile_group_l.append(blend_mask)
-                tile_pass_l.append(tile_group_l)
-            allTiles.append(tile_pass_l)
-        return allTiles
+        return self.getBlendMaskTiles(tile_pos, B)
 
 ###### Multi-Pass - Overlap Tiling Strategy ######   
 class MP_OVPStrategy(Tiling_Strategy_Base):
@@ -1477,35 +1435,10 @@ class ADPService(Tiling_Strategy_Base):
         return self.getTilesfromTilePos(noise_tensor, tile_positions)
     
     def getDenoiseMaskTilesforADPStrategy(self, noise_mask, tile_pos,):
-        allTiles = []
-        for tile_pos_pass in tile_pos:
-            tile_pass_l = []
-            for tile_pos_group in tile_pos_pass:
-                tile_group_l = []
-                for (x, y, tile_w, tile_h) in tile_pos_group:
-                    tile_mask = self.generateGenDenoiseMask(tile_h, tile_w)
-                    tiled_mask = None
-                    if noise_mask is not None:
-                        tiled_mask = self.tensorService.getSlice(noise_mask, y, tile_h, x, tile_w)
-                    if tile_mask is not None:
-                        tiled_mask = tiled_mask * tile_mask if tiled_mask is not None else tile_mask
-                    tile_group_l.append(tiled_mask)
-                tile_pass_l.append(tile_group_l)
-            allTiles.append(tile_pass_l)
-        return allTiles
+        return self.getDenoiseMaskTiles(noise_mask, tile_pos)
     
     def getBlendeMaskTilesforADPStrategy(self, tile_pos, B):
-        allTiles = []
-        for tile_pos_pass in tile_pos:
-            tile_pass_l = []
-            for tile_pos_group in tile_pos_pass:
-                tile_group_l = []
-                for (x, y, tile_w, tile_h) in tile_pos_group:
-                    blend_mask = self.generateGenBlendMask(B, tile_h, tile_w)
-                    tile_group_l.append(blend_mask)
-                tile_pass_l.append(tile_group_l)
-            allTiles.append(tile_pass_l)
-        return allTiles
+        return self.getBlendMaskTiles(tile_pos, B)
 
 ###### Multi-Pass - Adaptive Tiling Strategy ######   
 class MP_ADPService(Tiling_Strategy_Base):
@@ -1625,35 +1558,10 @@ class HRCService(Tiling_Strategy_Base):
         return self.getTilesfromTilePos(noise_tensor, tile_positions)
     
     def getDenoiseMaskTilesforHRCStrategy(self, noise_mask, tile_pos,):
-        allTiles = []
-        for tile_pos_pass in tile_pos:
-            tile_pass_l = []
-            for tile_pos_group in tile_pos_pass:
-                tile_group_l = []
-                for (x, y, tile_w, tile_h) in tile_pos_group:
-                    tile_mask = self.generateGenDenoiseMask(tile_h, tile_w)
-                    tiled_mask = None
-                    if noise_mask is not None:
-                        tiled_mask = self.tensorService.getSlice(noise_mask, y, tile_h, x, tile_w)
-                    if tile_mask is not None:
-                        tiled_mask = tiled_mask * tile_mask if tiled_mask is not None else tile_mask
-                    tile_group_l.append(tiled_mask)
-                tile_pass_l.append(tile_group_l)
-            allTiles.append(tile_pass_l)
-        return allTiles
+        return self.getDenoiseMaskTiles(noise_mask, tile_pos)
     
-    def getBlendeMaskTilesforHRCStrategy(self, tile_pos, B):
-        allTiles = []
-        for tile_pos_pass in tile_pos:
-            tile_pass_l = []
-            for tile_pos_group in tile_pos_pass:
-                tile_group_l = []
-                for (x, y, tile_w, tile_h) in tile_pos_group:
-                    blend_mask = self.generateGenBlendMask(B, tile_h, tile_w)
-                    tile_group_l.append(blend_mask)
-                tile_pass_l.append(tile_group_l)
-            allTiles.append(tile_pass_l)
-        return allTiles
+    def getBlendMaskTilesforHRCStrategy(self, tile_pos, B):
+        return self.getBlendMaskTiles(tile_pos, B)
 
 ###### Single Pass - Hierarchical Tiling Strategy ######  
 class MP_HRCService(Tiling_Strategy_Base):
@@ -1688,8 +1596,8 @@ class MP_HRCService(Tiling_Strategy_Base):
     def getDenoiseMaskTilesforMP_HRCStrategy(self, noise_mask, tile_pos):
         return self.hrc_Service.getDenoiseMaskTilesforHRCStrategy(noise_mask, tile_pos)
 
-    def getBlendeMaskTilesforMP_HRCStrategy(self, tile_pos, B):
-        return self.hrc_Service.getBlendeMaskTilesforHRCStrategy(tile_pos, B)
+    def getBlendMaskTilesforMP_HRCStrategy(self, tile_pos, B):
+        return self.hrc_Service.getBlendMaskTilesforHRCStrategy(tile_pos, B)
 
 ###### Single-Pass - Non-Uniform Tiling Strategy ###### 
 class NUService(Tiling_Strategy_Base): 
@@ -1732,9 +1640,7 @@ class NUService(Tiling_Strategy_Base):
 
 
     def generatePosforNUStrategy(self, latent_tensor, tile_width=64, tile_height=64, min_tile_size=16, scale_min=0.25, scale_max=2.0):
-        """
-        Generates non-uniform tiles using a depth-array format: [[[pass_1_tiles]]]
-        """
+
         B, C, latent_height, latent_width = latent_tensor.shape
         average_tile_size = int((tile_width + tile_height) / 2)
 
@@ -1792,35 +1698,10 @@ class NUService(Tiling_Strategy_Base):
         return self.getTilesfromTilePos(noise_tensor, tile_positions)
     
     def getDenoiseMaskTilesforNUStrategy(self, noise_mask, tile_pos,):
-        allTiles = []
-        for tile_pos_pass in tile_pos:
-            tile_pass_l = []
-            for tile_pos_group in tile_pos_pass:
-                tile_group_l = []
-                for (x, y, tile_w, tile_h) in tile_pos_group:
-                    tile_mask = self.generateGenDenoiseMask(tile_h, tile_w)
-                    tiled_mask = None
-                    if noise_mask is not None:
-                        tiled_mask = self.tensorService.getSlice(noise_mask, y, tile_h, x, tile_w)
-                    if tile_mask is not None:
-                        tiled_mask = tiled_mask * tile_mask if tiled_mask is not None else tile_mask
-                    tile_group_l.append(tiled_mask)
-                tile_pass_l.append(tile_group_l)
-            allTiles.append(tile_pass_l)
-        return allTiles
+        return self.getDenoiseMaskTiles(noise_mask, tile_pos)
     
     def getBlendeMaskTilesforNUStrategy(self, tile_pos, B):
-        allTiles = []
-        for tile_pos_pass in tile_pos:
-            tile_pass_l = []
-            for tile_pos_group in tile_pos_pass:
-                tile_group_l = []
-                for (x, y, tile_w, tile_h) in tile_pos_group:
-                    blend_mask = self.generateGenBlendMask(B, tile_h, tile_w)
-                    tile_group_l.append(blend_mask)
-                tile_pass_l.append(tile_group_l)
-            allTiles.append(tile_pass_l)
-        return allTiles
+        return self.getBlendMaskTiles(tile_pos, B)
 
 ###### Multi-Pass - Non-Uniform Tiling Strategy ######  
 class MP_NUService(Tiling_Strategy_Base): 
@@ -2029,7 +1910,7 @@ class LatentTiler:
                 tiled_tiles = self.tilingService.hrc_Service.getTilesforHRCStrategy(samples, tiled_positions)
                 tiled_noise_tiles = self.tilingService.hrc_Service.getNoiseTilesforHRCStrategy(noise, tiled_positions)
                 tiled_denoise_masks = self.tilingService.hrc_Service.getDenoiseMaskTilesforHRCStrategy(noise_mask, tiled_positions)
-                tiled_blend_masks = self.tilingService.hrc_Service.getBlendeMaskTilesforHRCStrategy(tiled_positions, B)
+                tiled_blend_masks = self.tilingService.hrc_Service.getBlendMaskTilesforHRCStrategy(tiled_positions, B)
             elif tiling_strategy == "non-uniform":
                 tiled_positions = self.tilingService.nu_Service.generatePosforNUStrategy(samples, tile_width, tile_height)
                 tiled_tiles = self.tilingService.nu_Service.getTilesforNUStrategy(samples, tiled_positions)
@@ -2089,7 +1970,7 @@ class LatentTiler:
                 tiled_tiles = self.tilingService.mp_hrc_Service.getTilesforMP_HRCStrategy(samples, tiled_positions)
                 tiled_noise_tiles = self.tilingService.mp_hrc_Service.getNoiseTilesforMP_HRCStrategy(noise, tiled_positions)
                 tiled_denoise_masks = self.tilingService.mp_hrc_Service.getDenoiseMaskTilesforMP_HRCStrategy(noise_mask, tiled_positions)
-                tiled_blend_masks = self.tilingService.mp_hrc_Service.getBlendeMaskTilesforMP_HRCStrategy(tiled_positions, B)
+                tiled_blend_masks = self.tilingService.mp_hrc_Service.getBlendMaskTilesforMP_HRCStrategy(tiled_positions, B)
             elif tiling_strategy == "non-uniform":
                 tiled_positions = self.tilingService.mp_nu_Service.generatePosforMP_NUStrategy(samples, passes, tile_width, tile_height)
                 tiled_tiles = self.tilingService.mp_nu_Service.getTilesforMP_NUStrategy(samples, tiled_positions)
@@ -2177,7 +2058,7 @@ class LatentMerger:
         merged_samples, weight_map = self.performMerging(all_tile_data)
 
         # Normalize the result
-        weight_map = torch.clamp(weight_map, min=1e-6)  # Avoid division by zero
+        weight_map = torch.clamp(weight_map, min=1e-6) 
         merged_samples /= weight_map
 
         return ({"samples": merged_samples},)
@@ -2186,7 +2067,7 @@ class LatentMerger:
         """
         Perform merging of all tiles from all passes in one step.
         """
-        device = comfy.model_management.get_torch_device()  # Get the current device from the model
+        device = comfy.model_management.get_torch_device() 
         
         # Determine the max width and height needed to accommodate all tiles
         max_width = max(x + w for _, (x, y, w, h), _ in all_tile_data)
