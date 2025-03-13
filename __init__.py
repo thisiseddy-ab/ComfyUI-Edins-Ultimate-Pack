@@ -18,12 +18,11 @@ print("EUP directory exists:", os.path.exists(EUP_directory_path))
 print("sys.path includes parent dir:", parent_dir in sys.path)
 
 _service_to_import_ = [
-    "basic_utils"
     ]
 
 _nodes_to_import_ = [
-
     "latent",
+    "sampler",
     "upscaler",
     ]
 

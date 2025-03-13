@@ -5,8 +5,8 @@ from server import PromptServer
 import comfy_extras.nodes_upscale_model as model_upscale
 from EUP.services.vae import vae_decode, vae_encode
 
-
-from EUP.nodes.latent import Tiled_KSampler
+#### Nodes #####
+from EUP.nodes.sampler import Tiled_KSampler
 
 
 def update_node_status(node, text, progress=None):
@@ -128,9 +128,10 @@ def latent_upscale_on_pixel_space_with_model2(samples, scale_method, upscale_mod
 
 class PixelTiledKSampleUpscaler:
     def __init__(self, scale_method, model, vae, seed, steps, cfg, sampler_name, scheduler, positive, negative,
-                 denoise,
-                 tile_width, tile_height, tiling_strategy, padding_strategy, padding,
-                 upscale_model_opt=None, hook_opt=None, tile_cnet_opt=None, tile_size=512, tile_cnet_strength=1.0, overlap=64):
+                 denoise, tile_width, tile_height, tiling_strategy, padding_strategy, padding,upscale_model_opt=None, 
+                 hook_opt=None, tile_cnet_opt=None, tile_size=512, tile_cnet_strength=1.0, overlap=64
+                 ):
+        
         self.params = scale_method, model, vae, seed, steps, cfg, sampler_name, scheduler, positive, negative, denoise
         self.vae = vae
         self.tile_params = tile_width, tile_height, tiling_strategy
