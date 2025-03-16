@@ -79,7 +79,7 @@ class Tiling_Strategy_Base():
             
             return mask
     
-    def generateGenDenoiseMask(self, tile_h, tile_w, border_strength=0.85, falloff=0.45, device='cpu'):
+    def generateGenDenoiseMask(self, tile_h, tile_w, border_strength=0.65, falloff=0.75, device='cpu'):
         """
         Generates a general denoise mask that reduces changes at the borders to prevent seams.
 
@@ -1254,6 +1254,40 @@ class HRCService(Tiling_Strategy_Base):
         tile_queue = [(0, 0, W, H)]  # Start with the full image
         final_tiles = []
 
+        ## Some Fixes So i do not get bit tile sizes
+        average_latent_size = (H + W) // 2
+        
+        if average_latent_size >= 256:
+            min_tile_size = 24
+        elif average_latent_size >= 512:
+            min_tile_size = 32
+        elif average_latent_size >= 1024:
+            min_tile_size = 48
+        elif average_latent_size >= 2048:
+            min_tile_size = 64
+        elif average_latent_size >= 4096:
+            min_tile_size = 96
+        elif average_latent_size >= 8192:
+            min_tile_size = 128
+        elif average_latent_size >= 16384:
+            min_tile_size = 192
+        
+        '''
+        if average_latent_size >= 512:
+            min_tile_size = 24
+        elif average_latent_size >= 1024:
+            min_tile_size = 32
+        elif average_latent_size >= 2048:
+            min_tile_size = 48
+        elif average_latent_size >= 4096:
+            min_tile_size = 64
+        elif average_latent_size >= 8192:
+            min_tile_size = 96
+        elif average_latent_size >= 16384:
+            min_tile_size = 128
+
+        '''
+
         while tile_queue:
             x, y, w, h = tile_queue.pop(0)
             x, y, w, h = int(x), int(y), int(w), int(h)
@@ -1380,6 +1414,11 @@ class NUService(Tiling_Strategy_Base):
         B, C, latent_height, latent_width = latent_tensor.shape
         average_tile_size = int((tile_width + tile_height) / 2)
 
+        ## Some Fixes So i do not get To much Tiles, and bigger tile than i can generate
+        if average_tile_size >= 128:
+            average_tile_size = 128
+            min_tile_size = 32
+            
         # Compute complexity map
         complexity_map = self.computeDetailMap(latent_tensor)  # Get the map
 

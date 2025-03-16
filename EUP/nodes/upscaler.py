@@ -1,3 +1,4 @@
+
 #### Comfy UI Lib's ####
 from nodes import MAX_RESOLUTION
 import comfy.samplers
@@ -6,7 +7,6 @@ import comfy.sample
 #### Services ####
 from EUP.services.status import StatusService
 from EUP.services.upscaler import PixelTiledKSampleUpscalerService
-
 
 SCHEDULERS = comfy.samplers.KSampler.SCHEDULERS + ['AYS SDXL', 'AYS SD1', 'AYS SVD', 'GITS[coeff=1.2]', 'LTXV[default]']
 
@@ -122,7 +122,7 @@ class PixelTiledKSampleUpscalerProvider:
         upscaler = PixelTiledKSampleUpscalerService(
             scale_method=scale_method, model=model, vae=vae, seed=seed, steps=steps, cfg=cfg, sampler_name=sampler_name, scheduler=scheduler, positive=positive, negative=negative, 
             denoise=denoise, tile_width=tile_width, tile_height=tile_height, tiling_mode=tiling_mode, passes=passes, tiling_strategy=tiling_strategy, padding_strategy=padding_strategy, 
-            overalp_padding=overalp_padding, upscale_model_opt=upscale_model_opt, pk_hook_opt=pk_hook_opt, tile_cnet_opt=tile_cnet_opt, tile_size=max(tile_width, tile_height), 
+            overalp_padding=overalp_padding, upscale_model_opt=upscale_model_opt, hook_opt=pk_hook_opt, tile_cnet_opt=tile_cnet_opt, tile_size=max(tile_width, tile_height), 
             tile_cnet_strength=tile_cnet_strength, overlap=overlap 
         )
         
@@ -170,7 +170,7 @@ class PixelTiledKSampleUpscalerProviderPipe:
         upscaler = upscaler = PixelTiledKSampleUpscalerService(
             scale_method=scale_method, model=model, vae=vae, seed=seed, steps=steps, cfg=cfg, sampler_name=sampler_name, scheduler=scheduler, positive=positive, negative=negative, 
             denoise=denoise, tile_width=tile_width, tile_height=tile_height, tiling_mode=tiling_mode, passes=passes, tiling_strategy=tiling_strategy, padding_strategy=padding_strategy, 
-            overalp_padding=overalp_padding, upscale_model_opt=upscale_model_opt, pk_hook_opt=pk_hook_opt, tile_cnet_opt=tile_cnet_opt, tile_size=max(tile_width, tile_height), 
+            overalp_padding=overalp_padding, upscale_model_opt=upscale_model_opt, hook_opt=pk_hook_opt, tile_cnet_opt=tile_cnet_opt, tile_size=max(tile_width, tile_height), 
             tile_cnet_strength=tile_cnet_strength)
         
         return (upscaler, )
