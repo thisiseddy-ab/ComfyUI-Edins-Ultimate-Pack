@@ -79,7 +79,7 @@ class Tiling_Strategy_Base():
             
             return mask
     
-    def generateGenDenoiseMask(self, tile_h, tile_w, border_strength=0.65, falloff=0.75, device='cpu'):
+    def generateGenDenoiseMask_Old(self, tile_h, tile_w, border_strength=0.65, falloff=0.75, device='cpu'):
         """
         Generates a general denoise mask that reduces changes at the borders to prevent seams.
 
@@ -114,6 +114,67 @@ class Tiling_Strategy_Base():
 
         return mask_tensor
     
+    def generateGenDenoiseMask(self, tile_h, tile_w, min_value=0.25, max_value=0.85, falloff=0.30, device='cpu'):
+        """
+        Generates a denoise mask with a reversed radial gradient, where the borders are min_value and
+        the center is max_value, with a smooth transition.
+
+        Parameters:
+            tile_h (int): The height of the tile.
+            tile_w (int): The width of the tile.
+            min_value (float): The minimum value for the mask (border).
+            max_value (float): The maximum value for the mask (center).
+            falloff (float): Controls how smoothly the mask transitions from border to center.
+            device (str): The device to place the tensor on ('cpu' or 'cuda').
+
+        Returns:
+            torch.Tensor: The generated denoise mask.
+        """
+        h = tile_h
+        w = tile_w
+        center_x, center_y = w // 2, h // 2
+
+        # Create grid for the tile's coordinates
+        y, x = np.ogrid[:h, :w]
+
+        # Calculate the distance from each point to the center
+        dist_x = np.abs(x - center_x)
+        dist_y = np.abs(y - center_y)
+        dist = np.maximum(dist_x, dist_y)
+
+        # Normalize the distance (max_dist is half the size of the larger dimension)
+        max_dist = np.max([w, h]) / 2
+        normalized_dist = dist / max_dist
+
+        # Create the radial gradient where the center is max_value and the borders are min_value
+        gradient = max_value - (normalized_dist ** falloff) * (max_value - min_value)
+
+        # Print the top border (first few rows)
+        #print("Top Border:")
+        #print(gradient[:5, :])
+
+        # Print the bottom border (last few rows)
+       # print("Bottom Border:")
+        #print(gradient[-5:, :])
+
+        # Print the left border (first few columns)
+        #print("Left Border:")
+        #print(gradient[:, :5])
+
+        # Print the right border (last few columns)
+        #print("Right Border:")
+        #print(gradient[:, -5:])
+
+        # Print the center region (middle of the mask)
+        #print("Center Region (middle part of the mask):")
+        #print(gradient[gradient.shape[0]//2-5:gradient.shape[0]//2+5, gradient.shape[1]//2-5:gradient.shape[1]//2+5])
+
+        # Convert to a torch tensor
+        mask_tensor = torch.tensor(gradient, dtype=torch.float32, device=device)
+
+        return mask_tensor
+
+        
     def generateDenoiseMask_atBoundary(self, h, h_len, w, w_len, tile_w, tile_h, latent_size_h, latent_size_w, mask, device='cpu'):
         # Check if a mask is needed at the boundary
         if (h_len == tile_h or h_len == latent_size_h) and (w_len == tile_w or w_len == latent_size_w):

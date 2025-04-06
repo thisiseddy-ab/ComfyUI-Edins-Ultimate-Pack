@@ -6,7 +6,7 @@ import comfy.sample
 
 #### Services ####
 from EUP.services.status import StatusService
-from EUP.services.upscaler import PixelTiledKSampleUpscalerService
+from EUP.services.upscaler import PixelTiledKSampleUpscalerService, AdvancedPixelTiledKSampleUpscalerService
 
 SCHEDULERS = comfy.samplers.KSampler.SCHEDULERS + ['AYS SDXL', 'AYS SD1', 'AYS SVD', 'GITS[coeff=1.2]', 'LTXV[default]']
 
@@ -93,13 +93,8 @@ class PixelTiledKSampleUpscalerProvider:
                     "scheduler": (comfy.samplers.KSampler.SCHEDULERS, ),
                     "positive": ("CONDITIONING", ),
                     "negative": ("CONDITIONING", ),
-                    "tile_width": ("INT", {"default": 512, "min": 320, "max": MAX_RESOLUTION, "step": 64}),
-                    "tile_height": ("INT", {"default": 512, "min": 320, "max": MAX_RESOLUTION, "step": 64}),
-                    "tiling_mode": (["single-pass", "multi-pass"],),
-                    "passes": ("INT", {"default": 2, "min": 2, "max": 8}),
                     "tiling_strategy": (["simple", "random", "padded", "adjacency-padded", "context-padded", "overlaping", "adaptive", "hierarchical", "non-uniform"],),
-                    "padding_strategy": (["organic", "circular", "reflect", "replicate", "zero"],),
-                    "overalp_padding": ("INT", {"default": 16, "min": 0, "max": 128}),
+                    "tiling_strategy_pars": ("TILING_STRG_PARS",),
                     "denoise": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
                         },
                 "optional": {
@@ -116,14 +111,13 @@ class PixelTiledKSampleUpscalerProvider:
 
     CATEGORY = "EUP - Ultimate Pack/Upscale"
 
-    def doit(self, scale_method, model, vae, seed, steps, cfg, sampler_name, scheduler, positive, negative, denoise, tile_width, tile_height, tiling_strategy, 
-             tiling_mode, passes, padding_strategy, overalp_padding, upscale_model_opt=None,pk_hook_opt=None, tile_cnet_opt=None, tile_cnet_strength=1.0, overlap=64):
+    def doit(self, scale_method, model, vae, seed, steps, cfg, sampler_name, scheduler, positive, negative, denoise, tiling_strategy, tiling_strategy_pars, 
+             upscale_model_opt=None, pk_hook_opt=None, tile_cnet_opt=None, tile_cnet_strength=1.0, overlap=64):
         
         upscaler = PixelTiledKSampleUpscalerService(
             scale_method=scale_method, model=model, vae=vae, seed=seed, steps=steps, cfg=cfg, sampler_name=sampler_name, scheduler=scheduler, positive=positive, negative=negative, 
-            denoise=denoise, tile_width=tile_width, tile_height=tile_height, tiling_mode=tiling_mode, passes=passes, tiling_strategy=tiling_strategy, padding_strategy=padding_strategy, 
-            overalp_padding=overalp_padding, upscale_model_opt=upscale_model_opt, hook_opt=pk_hook_opt, tile_cnet_opt=tile_cnet_opt, tile_size=max(tile_width, tile_height), 
-            tile_cnet_strength=tile_cnet_strength, overlap=overlap 
+            denoise=denoise, tiling_strategy=tiling_strategy, tiling_strategy_pars=tiling_strategy_pars, upscale_model_opt=upscale_model_opt, hook_opt=pk_hook_opt, 
+            tile_cnet_opt=tile_cnet_opt, tile_size=max(512, 512), tile_cnet_strength=tile_cnet_strength, overlap=overlap 
         )
         
         return (upscaler, )
@@ -141,12 +135,8 @@ class PixelTiledKSampleUpscalerProviderPipe:
                     "cfg": ("FLOAT", {"default": 8.0, "min": 0.0, "max": 100.0}),
                     "sampler_name": (comfy.samplers.KSampler.SAMPLERS, ),
                     "scheduler": (comfy.samplers.KSampler.SCHEDULERS, ),
-                    "tile_width": ("INT", {"default": 512, "min": 320, "max": MAX_RESOLUTION, "step": 64}),
-                    "tile_height": ("INT", {"default": 512, "min": 320, "max": MAX_RESOLUTION, "step": 64}),
-                    "tiling_mode": (["single-pass", "multi-pass"],),
-                    "passes": ("INT", {"default": 2, "min": 2, "max": 8}),
                     "tiling_strategy": (["simple", "random", "padded", "adjacency-padded", "context-padded", "overlaping", "adaptive", "hierarchical", "non-uniform"],),
-                    "padding_strategy": (["organic", "circular", "reflect", "replicate", "zero"],),
+                    "tiling_strategy_pars": ("TILING_STRG_PARS",),
                     "denoise": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
                     "basic_pipe": ("BASIC_PIPE",)
                     },
@@ -163,23 +153,138 @@ class PixelTiledKSampleUpscalerProviderPipe:
 
     CATEGORY = "EUP - Ultimate Pack/Upscale"
 
-    def doit(self, scale_method, seed, steps, cfg, sampler_name, scheduler, denoise, tile_width, tile_height, tiling_mode, passes, tiling_strategy, padding_strategy, overalp_padding, 
-             basic_pipe, upscale_model_opt=None, pk_hook_opt=None, tile_cnet_opt=None, tile_cnet_strength=1.0):
+    def doit(self, scale_method, seed, steps, cfg, sampler_name, scheduler, denoise, tiling_strategy, tiling_strategy_pars,
+             basic_pipe, upscale_model_opt=None, pk_hook_opt=None, tile_cnet_opt=None, tile_cnet_strength=1.0, overlap=64):
         
         model, _, vae, positive, negative = basic_pipe
-        upscaler = upscaler = PixelTiledKSampleUpscalerService(
+        upscaler = PixelTiledKSampleUpscalerService(
             scale_method=scale_method, model=model, vae=vae, seed=seed, steps=steps, cfg=cfg, sampler_name=sampler_name, scheduler=scheduler, positive=positive, negative=negative, 
-            denoise=denoise, tile_width=tile_width, tile_height=tile_height, tiling_mode=tiling_mode, passes=passes, tiling_strategy=tiling_strategy, padding_strategy=padding_strategy, 
-            overalp_padding=overalp_padding, upscale_model_opt=upscale_model_opt, hook_opt=pk_hook_opt, tile_cnet_opt=tile_cnet_opt, tile_size=max(tile_width, tile_height), 
-            tile_cnet_strength=tile_cnet_strength)
+            denoise=denoise, tiling_strategy=tiling_strategy, tiling_strategy_pars=tiling_strategy_pars, upscale_model_opt=upscale_model_opt, hook_opt=pk_hook_opt, 
+            tile_cnet_opt=tile_cnet_opt, tile_size=max(512, 512), tile_cnet_strength=tile_cnet_strength, overlap=overlap)
         
         return (upscaler, )
+    
+
+class AdvancedPixelTiledKSampleUpscalerProvider:
+    upscale_methods = ["nearest-exact", "bilinear", "lanczos", "area"]
+
+    @classmethod
+    def INPUT_TYPES(s):
+        return {"required": {
+                    "scale_method": (s.upscale_methods,),
+                    "model": ("MODEL",),
+                    "vae": ("VAE",),
+                    "add_noise": (["enable", "disable"], ),
+                    "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
+                    "steps": ("INT", {"default": 20, "min": 1, "max": 10000}),
+                    "cfg": ("FLOAT", {"default": 8.0, "min": 0.0, "max": 100.0}),
+                    "sampler_name": (comfy.samplers.KSampler.SAMPLERS, ),
+                    "scheduler": (comfy.samplers.KSampler.SCHEDULERS, ),
+                    "positive": ("CONDITIONING", ),
+                    "negative": ("CONDITIONING", ),
+                    "tiling_strategy": (["simple", "random", "padded", "adjacency-padded", "context-padded", "overlaping", "adaptive", "hierarchical", "non-uniform"],),
+                    "tiling_strategy_pars": ("TILING_STRG_PARS",),
+                    "start_at_step": ("INT", {"default": 0, "min": 0, "max": 10000}),
+                    "end_at_step": ("INT", {"default": 10000, "min": 0, "max": 10000}),
+                    "return_with_leftover_noise": (["disable", "enable"], ),
+                        },
+                "optional": {
+                        "upscale_model_opt": ("UPSCALE_MODEL", ),
+                        "pk_hook_opt": ("PK_HOOK", ),
+                        "tile_cnet_opt": ("CONTROL_NET", ),
+                        "tile_cnet_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
+                        "overlap": ("INT", {"default": 64, "min": 0, "max": 4096, "step": 32}),
+                    }
+                }
+
+    RETURN_TYPES = ("UPSCALER",)
+    FUNCTION = "doit"
+
+    CATEGORY = "EUP - Ultimate Pack/Upscale"
+
+    def doit(self, scale_method, model, vae, add_noise, seed, steps, cfg, sampler_name, scheduler, positive, negative, tiling_strategy, tiling_strategy_pars, 
+             start_at_step, end_at_step, return_with_leftover_noise, upscale_model_opt=None, pk_hook_opt=None, tile_cnet_opt=None, tile_cnet_strength=1.0, overlap=64):
+        
+        upscaler = AdvancedPixelTiledKSampleUpscalerService(
+            scale_method=scale_method, model=model, vae=vae, add_noise=add_noise, seed=seed, steps=steps, cfg=cfg, sampler_name=sampler_name, scheduler=scheduler, 
+            positive=positive, negative=negative, tiling_strategy=tiling_strategy, tiling_strategy_pars=tiling_strategy_pars, start_at_step=start_at_step, end_at_step=end_at_step, 
+            return_with_leftover_noise=return_with_leftover_noise, upscale_model_opt=upscale_model_opt, hook_opt=pk_hook_opt, tile_cnet_opt=tile_cnet_opt, 
+            tile_size=max(512, 512), tile_cnet_strength=tile_cnet_strength, overlap=overlap 
+        )
+        
+        return (upscaler, )
+    
+class AdvancedPixelTiledKSampleUpscalerProviderPipe:
+    upscale_methods = ["nearest-exact", "bilinear", "lanczos", "area"]
+
+    @classmethod
+    def INPUT_TYPES(s):
+        return {"required": {
+                    "overalp_padding": ("INT", {"default": 16, "min": 0, "max": 128}),
+                    "start_at_step": ("INT", {"default": 0, "min": 0, "max": 10000}),
+                    "end_at_step": ("INT", {"default": 10000, "min": 0, "max": 10000}),
+                    "return_with_leftover_noise": (["disable", "enable"], ),
+                        },
+                "optional": {
+                        "upscale_model_opt": ("UPSCALE_MODEL", ),
+                        "pk_hook_opt": ("PK_HOOK", ),
+                        "tile_cnet_opt": ("CONTROL_NET", ),
+                        "tile_cnet_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
+                        "overlap": ("INT", {"default": 64, "min": 0, "max": 4096, "step": 32}),
+                    }
+                }
+
+    @classmethod
+    def INPUT_TYPES(s):
+        return {"required": {
+                    "scale_method": (s.upscale_methods,),
+                    "add_noise": (["enable", "disable"], ),
+                    "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
+                    "steps": ("INT", {"default": 20, "min": 1, "max": 10000}),
+                    "cfg": ("FLOAT", {"default": 8.0, "min": 0.0, "max": 100.0}),
+                    "sampler_name": (comfy.samplers.KSampler.SAMPLERS, ),
+                    "scheduler": (comfy.samplers.KSampler.SCHEDULERS, ),
+                    "tiling_strategy": (["simple", "random", "padded", "adjacency-padded", "context-padded", "overlaping", "adaptive", "hierarchical", "non-uniform"],),
+                    "tiling_strategy_pars": ("TILING_STRG_PARS",),
+                    "start_at_step": ("INT", {"default": 0, "min": 0, "max": 10000}),
+                    "end_at_step": ("INT", {"default": 10000, "min": 0, "max": 10000}),
+                    "return_with_leftover_noise": (["disable", "enable"], ),
+                    "basic_pipe": ("BASIC_PIPE",)
+                    },
+                "optional": {
+                        "upscale_model_opt": ("UPSCALE_MODEL", ),
+                        "pk_hook_opt": ("PK_HOOK", ),
+                        "tile_cnet_opt": ("CONTROL_NET", ),
+                        "tile_cnet_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
+                    }
+                }
+
+    RETURN_TYPES = ("UPSCALER",)
+    FUNCTION = "doit"
+
+    CATEGORY = "EUP - Ultimate Pack/Upscale"
+
+    def doit(self, scale_method, add_noise, seed, steps, cfg, sampler_name, scheduler, tiling_strategy, tiling_strategy_pars, start_at_step, end_at_step, 
+            return_with_leftover_noise, basic_pipe, upscale_model_opt=None, pk_hook_opt=None, tile_cnet_opt=None, tile_cnet_strength=1.0, overlap=64):
+        
+        model, _, vae, positive, negative = basic_pipe
+        upscaler = AdvancedPixelTiledKSampleUpscalerService(
+            scale_method=scale_method, model=model, vae=vae, add_noise=add_noise, seed=seed, steps=steps, cfg=cfg, sampler_name=sampler_name, scheduler=scheduler, 
+            positive=positive, negative=negative, tiling_strategy=tiling_strategy, tiling_strategy_pars=tiling_strategy_pars, start_at_step=start_at_step, end_at_step=end_at_step, 
+            return_with_leftover_noise=return_with_leftover_noise, upscale_model_opt=upscale_model_opt, hook_opt=pk_hook_opt, tile_cnet_opt=tile_cnet_opt, 
+            tile_size=max(512, 512), tile_cnet_strength=tile_cnet_strength, overlap=overlap 
+        )
+        
+        return (upscaler, )
+
     
 
 NODE_CLASS_MAPPINGS = {
     "EUP - Iterative Latent Upscaler": IterativeLatentUpscale,
     "EUP - Pixel TiledKSample Upscaler Provider": PixelTiledKSampleUpscalerProvider,
     "EUP - Pixel TiledKSample Upscaler Provider Pipe": PixelTiledKSampleUpscalerProviderPipe,
+    "EUP - Advanced Pixel TiledKSample Upscaler Provider": AdvancedPixelTiledKSampleUpscalerProvider,
+    "EUP - Advanced Pixel TiledKSample Upscaler Provider Pipe": AdvancedPixelTiledKSampleUpscalerProviderPipe,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {

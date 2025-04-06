@@ -5,6 +5,8 @@ import comfy.model_management
 import torch
 
 #### My Services's #####
+from EUP.services.units import UnitsService
+from EUP.services.tiling import TilingService
 from EUP.services.cnet import ControlNetService
 from EUP.services.t2i import T2IService
 from EUP.services.gligen import GligenService
@@ -13,10 +15,204 @@ from EUP.services.condition import ConditionService
 class LatentTilerService():
 
     def __init__(self):
+        self.untisService = UnitsService()
+        self.tilingService = TilingService()
         self.conditionService = ConditionService()
         self.conrolNetService = ControlNetService()
         self.t2iService = T2IService()
         self.gligenService = GligenService()
+
+    def getPaddLatentSize(self, image_size: int) -> int:
+        if image_size > 0:
+            return self.untisService.getLatentSize(image_size)
+        return 0
+    
+    def convertPXtoLatentSize(self, tile_height, tile_width, padding) -> int:   
+        # Converts Size From Pixel to Latent
+        tile_height = self.untisService.getLatentSize(tile_height)
+        tile_width = self.untisService.getLatentSize(tile_width)
+        padding = self.getPaddLatentSize(padding)
+
+        return (tile_height, tile_width, padding)
+    
+    def tileLatent(self, model, sampler, seed, latent_image, positive, negative, tiling_strategy, tiling_strategy_pars, disable_noise, start_step):
+        samples = latent_image.get("samples")
+        shape = samples.shape
+        B, C, H, W = shape
+
+        print(f"[EUP - Latent Tiler]: Original Latent Size: {samples.shape}")
+
+        noise = self.tilingService.generateRandomNoise(latent_image, seed, disable_noise)
+        noise_mask = self.tilingService.generateNoiseMask(latent_image, noise)
+
+        if noise_mask is not None:
+            samples += sampler.sigmas[start_step].cpu() * noise_mask * model.model.process_latent_out(noise)
+        else:
+            samples += sampler.sigmas[start_step].cpu() * model.model.process_latent_out(noise)
+
+        #### Chosing Tiling Strategy ####
+        if tiling_strategy == "simple":
+            tile_width, tile_height, tiling_mode, passes = tiling_strategy_pars
+            tile_height, tile_width, _ = self.convertPXtoLatentSize(tile_height, tile_width, 0)
+            if tiling_mode == "single-pass":
+                tiled_positions = self.tilingService.st_Service.generatePosforSTStrategy(W, H, tile_width, tile_height)
+                tiled_tiles = self.tilingService.st_Service.getTilesforSTStrategy(samples, tiled_positions)
+                tiled_noise_tiles = self.tilingService.st_Service.getNoiseTilesforSTStrategy(noise, tiled_positions)
+                tiled_denoise_masks = self.tilingService.st_Service.getDenoiseMaskTilesforSTStrategy(noise_mask, tiled_positions)
+                tiled_blend_masks = self.tilingService.st_Service.getBlendMaskTilesforSTStrategy(tiled_positions, B)
+            elif tiling_mode == "multi-pass":
+                tiled_positions = self.tilingService.mp_st_Service.generatePosforMP_STStrategy(W, H, tile_width, tile_height, passes)
+                tiled_tiles = self.tilingService.mp_st_Service.getTilesforMP_STStrategy(samples, tiled_positions)
+                tiled_noise_tiles = self.tilingService.mp_st_Service.getNoiseTilesforMP_STStrategy(noise, tiled_positions)
+                tiled_denoise_masks = self.tilingService.mp_st_Service.getDenoiseMaskTilesforMP_STStrategy(noise_mask, tiled_positions)
+                tiled_blend_masks = self.tilingService.mp_st_Service.getBlendMaskTilesforMP_STStrategy(tiled_positions, B)
+            else:
+                raise ValueError("[EUP - Latent Tiler]: Warning: Invalid Tiling Mode for Simple Tiling. Please select a valid Tiling Mode.")
+        elif tiling_strategy == "random":
+            tile_width, tile_height, tiling_mode, passes = tiling_strategy_pars
+            tile_height, tile_width, _ = self.convertPXtoLatentSize(tile_height, tile_width, 0)
+            if tiling_mode == "single-pass":
+                tiled_positions = self.tilingService.rt_Service.generatePosforRTStrategy(W, H, tile_width, tile_height, seed)
+                tiled_tiles = self.tilingService.rt_Service.getTilesforRTStrategy(samples, tiled_positions)
+                tiled_noise_tiles = self.tilingService.rt_Service.getNoiseTilesforRTStrategy(noise, tiled_positions)
+                tiled_denoise_masks = self.tilingService.rt_Service.getDenoiseMaskTilesforRTStrategy(noise_mask, tiled_positions)
+                tiled_blend_masks = self.tilingService.rt_Service.getBlendMaskTilesforRTStrategy(tiled_positions, B)
+            elif tiling_mode == "multi-pass":
+                tiled_positions = self.tilingService.mp_rt_Service.generatePos_forMP_RTStrategy(W, H, tile_width, tile_height, seed, passes)
+                tiled_tiles = self.tilingService.mp_rt_Service.getTilesforMP_RTStrategy(samples, tiled_positions)
+                tiled_noise_tiles = self.tilingService.mp_rt_Service.getNoiseTilesforMP_RTStrategy(noise, tiled_positions)
+                tiled_denoise_masks = self.tilingService.mp_rt_Service.getDenoiseMaskTilesforMP_RTStrategy(noise_mask, tiled_positions)
+                tiled_blend_masks = self.tilingService.mp_rt_Service.getBlendMaskTilesforMP_RTStrategy(tiled_positions, B)
+            else:
+                raise ValueError("[EUP - Latent Tiler]: Warning: Invalid Tiling Mode for Random Tiling. Please select a valid Tiling Mode.")
+        elif tiling_strategy == "padded":
+            tile_width, tile_height, tiling_mode, passes, padding_strategy, padding = tiling_strategy_pars
+            tile_height, tile_width, padding = self.convertPXtoLatentSize(tile_height, tile_width, padding)
+            if tiling_mode == "single-pass":
+                tiled_positions = self.tilingService.pt_Service.generatePosforPTStrategy(W, H, tile_width, tile_height, padding)
+                tiled_tiles = self.tilingService.pt_Service.getTilesforPTStrategy(samples, tiled_positions)
+                tiled_tiles = self.tilingService.pt_Service.getPaddedTilesforPTStrategy(tiled_tiles, tiled_positions, padding_strategy, padding)
+                tiled_noise_tiles = self.tilingService.pt_Service.getNoiseTilesforPTStrategy(latent_image, tiled_tiles, seed, disable_noise)
+                tiled_denoise_masks = self.tilingService.pt_Service.getDenoiseMaskTilesforPTStrategy(noise_mask, tiled_positions, tiled_tiles)
+                tiled_blend_masks = self.tilingService.pt_Service.getBlendMaskTilesforPTStrategy(tiled_tiles, B)
+            elif tiling_mode == "multi-pass":
+                tiled_positions = self.tilingService.mp_pt_Service.generatePos_forMP_PTStrategy(W, H, tile_width, tile_height, padding, passes)
+                tiled_tiles = self.tilingService.mp_pt_Service.getTilesforMP_PTStrategy(samples, tiled_positions)
+                tiled_tiles = self.tilingService.mp_pt_Service.getPaddedTilesforMP_PTStrategy(tiled_tiles, tiled_positions, padding_strategy, padding)
+                tiled_noise_tiles = self.tilingService.mp_pt_Service.getNoiseTilesforMP_PTStrategy(latent_image, tiled_tiles, seed, disable_noise)
+                tiled_denoise_masks = self.tilingService.mp_pt_Service.getDenoiseMaskTilesforMP_PTStrategy(noise_mask, tiled_positions, tiled_tiles)
+                tiled_blend_masks = self.tilingService.mp_pt_Service.getBlendMaskTilesforMP_PTStrategy(tiled_tiles, B)
+            else:
+                raise ValueError("[EUP - Latent Tiler]: Warning: Invalid Tiling Mode for Padded Tiling. Please select a valid Tiling Mode.")
+        elif tiling_strategy == "adjacency-padded":
+            tile_width, tile_height, tiling_mode, passes, padding_strategy, padding = tiling_strategy_pars
+            tile_height, tile_width, padding = self.convertPXtoLatentSize(tile_height, tile_width, padding)
+            if tiling_mode == "single-pass":
+                tiled_positions = self.tilingService.apt_Service.generatePosforAPTStrategy(W, H, tile_width, tile_height, padding)
+                tiled_tiles = self.tilingService.apt_Service.getTilesforAPTStrategy(samples, tiled_positions)
+                tiled_tiles = self.tilingService.apt_Service.getPaddedTilesforAPTStrategy(tiled_tiles, tiled_positions, padding_strategy, padding)
+                tiled_noise_tiles = self.tilingService.apt_Service.getNoiseTilesforAPTStrategy(latent_image, tiled_tiles, seed, disable_noise)
+                tiled_denoise_masks = self.tilingService.apt_Service.getDenoiseMaskTilesforAPTStrategy(noise_mask, tiled_positions, tiled_tiles)
+                tiled_blend_masks = self.tilingService.apt_Service.getBlendMaskTilesforAPTStrategy(tiled_tiles, B)
+            elif tiling_mode == "multi-pass":
+                tiled_positions = self.tilingService.mp_apt_Service.generatePos_forMP_APTStrategy(W, H, tile_width, tile_height, padding, passes)
+                tiled_tiles = self.tilingService.mp_apt_Service.getTilesforMP_APTStrategy(samples, tiled_positions)
+                tiled_tiles = self.tilingService.mp_apt_Service.getPaddedTilesforMP_APTStrategy(tiled_tiles, tiled_positions, padding_strategy, padding)
+                tiled_noise_tiles = self.tilingService.mp_apt_Service.getNoiseTilesforMP_APTStrategy(latent_image, tiled_tiles, seed, disable_noise)
+                tiled_denoise_masks = self.tilingService.mp_apt_Service.getDenoiseMaskTilesforMP_APTStrategy(noise_mask, tiled_positions, tiled_tiles)
+                tiled_blend_masks = self.tilingService.mp_apt_Service.getBlendMaskTilesforMP_APTStrategy(tiled_tiles, B)
+            else:
+                raise ValueError("[EUP - Latent Tiler]: Warning: Invalid Tiling Mode for Adjacency Padded Tiling. Please select a valid Tiling Mode.")
+        elif tiling_strategy == "context-padded":
+            tile_width, tile_height, tiling_mode, passes = tiling_strategy_pars
+            tile_height, tile_width, _ = self.convertPXtoLatentSize(tile_height, tile_width, 0)
+            if tiling_mode == "single-pass":
+                tiled_positions = self.tilingService.cpt_Service.generatePosforCPTStrategy(W, H, tile_width, tile_height)
+                tiled_denoise_masks = self.tilingService.cpt_Service.getDenoiseMaskTilesforCPTStrategy(noise_mask, tiled_positions, B, H, W)
+                tiled_tiles = self.tilingService.cpt_Service.getTilesforCPTStrategy(samples, tiled_positions)
+                tiled_noise_tiles = self.tilingService.cpt_Service.getNoiseTilesforCPTStrategy(noise, tiled_positions)
+                tiled_blend_masks = self.tilingService.cpt_Service.getBlendeMaskTilesforCPTStrategy(tiled_positions, B)
+            elif tiling_mode == "multi-pass":
+                tiled_positions = self.tilingService.mp_cpt_Service.generatePosforMP_CPTStrategy(W, H, tile_width, tile_height)
+                tiled_denoise_masks = self.tilingService.mp_cpt_Service.getDenoiseMaskTilesforMP_CPTStrategy(noise_mask, tiled_positions, B, H, W)
+                tiled_tiles = self.tilingService.mp_cpt_Service.getTilesforMP_CPTStrategy(samples, tiled_positions)
+                tiled_noise_tiles = self.tilingService.mp_cpt_Service.getNoiseTilesforMP_CPTStrategy(noise, tiled_positions)
+                tiled_blend_masks = self.tilingService.mp_cpt_Service.getBlendeMaskTilesforMP_CPTStrategy(tiled_positions, B)
+            else:
+                raise ValueError("[EUP - Latent Tiler]: Warning: Invalid Tiling Mode for Contextual Padded Tiling. Please select a valid Tiling Mode.")
+        elif tiling_strategy == "overlaping":
+            tile_width, tile_height, tiling_mode, passes, overalp = tiling_strategy_pars
+            tile_height, tile_width, overalp = self.convertPXtoLatentSize(tile_height, tile_width, overalp)
+            if tiling_mode == "single-pass":
+                tiled_positions = self.tilingService.ovp_Service.generatePosforOVPStrategy(W, H, tile_width, tile_height, overalp)
+                tiled_tiles = self.tilingService.ovp_Service.getTilesforOVPStrategy(samples, tiled_positions)
+                tiled_noise_tiles = self.tilingService.ovp_Service.getNoiseTilesforOVPStrategy(noise, tiled_positions)
+                tiled_denoise_masks = self.tilingService.ovp_Service.getDenoiseMaskTilesforOVPStrategy(noise_mask, tiled_positions)
+                tiled_blend_masks = self.tilingService.ovp_Service.getBlendeMaskTilesforOVPStrategy(tiled_positions, B)
+            elif tiling_mode == "multi-pass":
+                tiled_positions = self.tilingService.mp_ovp_Service.generatePosforMP_OVPStrategy(W, H, tile_width, tile_height, overalp, passes)
+                tiled_tiles = self.tilingService.mp_ovp_Service.getTilesforMP_OVPStrategy(samples, tiled_positions)
+                tiled_noise_tiles = self.tilingService.mp_ovp_Service.getNoiseTilesforMP_OVPStrategy(noise, tiled_positions)
+                tiled_denoise_masks = self.tilingService.mp_ovp_Service.getDenoiseMaskTilesforMP_OVPStrategy(noise_mask, tiled_positions)
+                tiled_blend_masks = self.tilingService.mp_ovp_Service.getBlendeMaskTilesforMP_OVPStrategy(tiled_positions, B)
+            else:
+                raise ValueError("[EUP - Latent Tiler]: Warning: Invalid Tiling Mode for Overlapping Tiling. Please select a valid Tiling Mode.")
+        elif tiling_strategy == "adaptive":
+            tile_width, tile_height, tiling_mode, passes = tiling_strategy_pars
+            tile_height, tile_width, _ = self.convertPXtoLatentSize(tile_height, tile_width, 0)
+            if tiling_mode == "single-pass":
+                tiled_positions = self.tilingService.adp_Service.generatePosforADPStrategy(samples, tile_width, tile_height)
+                tiled_tiles = self.tilingService.adp_Service.getTilesforADPStrategy(samples, tiled_positions)
+                tiled_noise_tiles = self.tilingService.adp_Service.getNoiseTilesforADPStrategy(noise, tiled_positions)
+                tiled_denoise_masks = self.tilingService.adp_Service.getDenoiseMaskTilesforADPStrategy(noise_mask, tiled_positions)
+                tiled_blend_masks = self.tilingService.adp_Service.getBlendeMaskTilesforADPStrategy(tiled_positions, B)
+            elif tiling_mode == "multi-pass":
+                tiled_positions = self.tilingService.mp_adp_Service.generatePos_forMP_ADPStrategy(samples, tile_width, tile_height, passes)
+                tiled_tiles = self.tilingService.mp_adp_Service.getTilesforMP_ADPStrategy(samples, tiled_positions)
+                tiled_noise_tiles = self.tilingService.mp_adp_Service.getNoiseTilesforMP_ADPStrategy(noise, tiled_positions)
+                tiled_denoise_masks = self.tilingService.mp_adp_Service.getDenoiseMaskTilesforMP_ADPStrategy(noise_mask, tiled_positions)
+                tiled_blend_masks = self.tilingService.mp_adp_Service.getBlendeMaskTilesforMP_ADPStrategy(tiled_positions, B)
+            else:
+                raise ValueError("[EUP - Latent Tiler]: Warning: Invalid Tiling Mode for Adaptive Tiling. Please select a valid Tiling Mode.")
+        elif tiling_strategy == "hierarchical":
+            tiling_mode, passes = tiling_strategy_pars
+            tile_height, tile_width, _ = self.convertPXtoLatentSize(tile_height, tile_width, 0)
+            if tiling_mode == "single-pass":
+                tiled_positions = self.tilingService.hrc_Service.generatePosforHRCStrategy(samples)
+                tiled_tiles = self.tilingService.hrc_Service.getTilesforHRCStrategy(samples, tiled_positions)
+                tiled_noise_tiles = self.tilingService.hrc_Service.getNoiseTilesforHRCStrategy(noise, tiled_positions)
+                tiled_denoise_masks = self.tilingService.hrc_Service.getDenoiseMaskTilesforHRCStrategy(noise_mask, tiled_positions)
+                tiled_blend_masks = self.tilingService.hrc_Service.getBlendMaskTilesforHRCStrategy(tiled_positions, B)
+            elif tiling_mode == "multi-pass":
+                tiled_positions = self.tilingService.mp_hrc_Service.generatePos_forMP_HRCStrategy(samples, passes)
+                tiled_tiles = self.tilingService.mp_hrc_Service.getTilesforMP_HRCStrategy(samples, tiled_positions)
+                tiled_noise_tiles = self.tilingService.mp_hrc_Service.getNoiseTilesforMP_HRCStrategy(noise, tiled_positions)
+                tiled_denoise_masks = self.tilingService.mp_hrc_Service.getDenoiseMaskTilesforMP_HRCStrategy(noise_mask, tiled_positions)
+                tiled_blend_masks = self.tilingService.mp_hrc_Service.getBlendMaskTilesforMP_HRCStrategy(tiled_positions, B)
+            else:
+                raise ValueError("[EUP - Latent Tiler]: Warning: Invalid Tiling Mode for Hierarchical Tiling. Please select a valid Tiling Mode.")
+        elif tiling_strategy == "non-uniform":
+            tile_width, tile_height, tiling_mode, passes = tiling_strategy_pars
+            tile_height, tile_width, _ = self.convertPXtoLatentSize(tile_height, tile_width, 0)
+            if tiling_mode == "single-pass":
+                tiled_positions = self.tilingService.nu_Service.generatePosforNUStrategy(samples, tile_width, tile_height)
+                tiled_tiles = self.tilingService.nu_Service.getTilesforNUStrategy(samples, tiled_positions)
+                tiled_noise_tiles = self.tilingService.nu_Service.getNoiseTilesforNUStrategy(noise, tiled_positions)
+                tiled_denoise_masks = self.tilingService.nu_Service.getDenoiseMaskTilesforNUStrategy(noise_mask, tiled_positions)
+                tiled_blend_masks = self.tilingService.nu_Service.getBlendeMaskTilesforNUStrategy(tiled_positions, B)
+            elif tiling_mode == "multi-pass":
+                tiled_positions = self.tilingService.mp_nu_Service.generatePosforMP_NUStrategy(samples, passes, tile_width, tile_height)
+                tiled_tiles = self.tilingService.mp_nu_Service.getTilesforMP_NUStrategy(samples, tiled_positions)
+                tiled_noise_tiles = self.tilingService.mp_nu_Service.getNoiseTilesforMP_NUStrategy(noise, tiled_positions)
+                tiled_denoise_masks = self.tilingService.mp_nu_Service.getDenoiseMaskTilesforMP_NUStrategy(noise_mask, tiled_positions)
+                tiled_blend_masks = self.tilingService.mp_nu_Service.getBlendeMaskTilesforMP_NUStrategy(tiled_positions, B)
+            else:
+                raise ValueError("[EUP - Latent Tiler]: Warning: Invalid Tiling Mode for Non-Uniform Tiling. Please select a valid Tiling Mode.")
+        else:
+            raise ValueError("[EUP - Latent Tiler]: Warning: Invalid Tiling Mode. Please select a valid Tiling Mode.")
+
+        #### Prepare the tiles for sampling ####
+        return self.prepareTilesforSampling(positive, negative, shape, samples, tiled_positions, tiled_tiles, tiled_noise_tiles, tiled_denoise_masks, tiled_blend_masks) 
 
     def prepareTilesforSampling(self, positive, negative, shape, samples, tiled_positions, tiled_tiles, tiled_noise_tiles, tiled_denoise_masks, tiled_blend_masks):
         # Extract and prepare cnets, T2Is, gligen, and spatial conditions
