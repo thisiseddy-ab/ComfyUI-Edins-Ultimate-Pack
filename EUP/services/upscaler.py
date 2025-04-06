@@ -9,7 +9,7 @@ from EUP.nodes.sampler import Tiled_KSampler, Tiled_KSamplerAdvanced
 
 class PixelTiledKSampleUpscalerService():
     def __init__(self, scale_method, model, vae, seed, steps, cfg, sampler_name, scheduler, positive, negative,
-                 denoise, tile_width, tile_height, tiling_mode, passes, tiling_strategy, padding_strategy, overalp_padding, upscale_model_opt=None, 
+                 denoise, tiling_strategy, tiling_strategy_pars, upscale_model_opt=None, 
                  hook_opt=None, tile_cnet_opt=None, tile_size=512, tile_cnet_strength=1.0, overlap=64
                  ):
         
@@ -20,7 +20,7 @@ class PixelTiledKSampleUpscalerService():
         self.params = model, seed, steps, cfg, sampler_name, scheduler, positive, negative, denoise
         self.scale_method = scale_method
         self.vae = vae
-        self.tile_params = tile_width, tile_height, tiling_mode, passes, tiling_strategy, padding_strategy, overalp_padding,
+        self.tile_params = tiling_strategy, tiling_strategy_pars,
         self.upscale_model = upscale_model_opt
         self.hook = hook_opt
         self.tile_cnet = tile_cnet_opt
@@ -32,7 +32,7 @@ class PixelTiledKSampleUpscalerService():
     def tiledKsample(self, latent, images):
 
         model, seed, steps, cfg, sampler_name, scheduler, positive, negative, denoise = self.params
-        tile_width, tile_height, tiling_mode, passes, tiling_strategy, padding_strategy, overalp_padding = self.tile_params
+        tiling_strategy, tiling_strategy_pars = self.tile_params
 
         if self.tile_cnet is not None:
             image_batch, image_w, image_h, _ = images.shape
@@ -63,13 +63,8 @@ class PixelTiledKSampleUpscalerService():
             positive=positive, 
             negative=negative, 
             latent_image=latent,
-            tile_width=tile_width, 
-            tile_height=tile_height,
-            tiling_mode=tiling_mode,
-            passes=passes,
             tiling_strategy=tiling_strategy,
-            padding_strategy=padding_strategy,
-            overalp_padding=overalp_padding,
+            tiling_strategy_pars=tiling_strategy_pars,
             denoise=denoise,
             )[0]
 
@@ -119,9 +114,9 @@ class PixelTiledKSampleUpscalerService():
     
 
 class AdvancedPixelTiledKSampleUpscalerService():
-    def __init__(self, scale_method, model, vae, add_noise, seed, steps, cfg, sampler_name, scheduler, positive, negative,
-                 tile_width, tile_height, tiling_mode, passes, tiling_strategy, padding_strategy, overalp_padding, start_at_step, end_at_step,
-                 return_with_leftover_noise, upscale_model_opt=None, hook_opt=None, tile_cnet_opt=None, tile_size=512, tile_cnet_strength=1.0, overlap=64
+    def __init__(self, scale_method, model, vae, add_noise, seed, steps, cfg, sampler_name, scheduler, positive, negative, tiling_strategy, tiling_strategy_pars, 
+                 start_at_step, end_at_step,return_with_leftover_noise, upscale_model_opt=None, hook_opt=None, tile_cnet_opt=None, tile_size=512, 
+                 tile_cnet_strength=1.0, overlap=64
                  ):
         
         #### Services ####
@@ -131,7 +126,7 @@ class AdvancedPixelTiledKSampleUpscalerService():
         self.params = model, add_noise, seed, steps, cfg, sampler_name, scheduler, positive, negative, start_at_step, end_at_step, return_with_leftover_noise
         self.scale_method = scale_method
         self.vae = vae
-        self.tile_params = tile_width, tile_height, tiling_mode, passes, tiling_strategy, padding_strategy, overalp_padding,
+        self.tile_params = tiling_strategy, tiling_strategy_pars,
         self.upscale_model = upscale_model_opt
         self.hook = hook_opt
         self.tile_cnet = tile_cnet_opt
@@ -143,7 +138,7 @@ class AdvancedPixelTiledKSampleUpscalerService():
     def tiledKsample(self, latent, images):
 
         model, add_noise, seed, steps, cfg, sampler_name, scheduler, positive, negative, start_at_step, end_at_step, return_with_leftover_noise = self.params
-        tile_width, tile_height, tiling_mode, passes, tiling_strategy, padding_strategy, overalp_padding = self.tile_params
+        tiling_strategy, tiling_strategy_pars = self.tile_params
 
         if self.tile_cnet is not None:
             image_batch, image_w, image_h, _ = images.shape
@@ -175,13 +170,8 @@ class AdvancedPixelTiledKSampleUpscalerService():
             positive=positive, 
             negative=negative, 
             latent_image=latent,
-            tile_width=tile_width, 
-            tile_height=tile_height,
-            tiling_mode=tiling_mode,
-            passes=passes,
             tiling_strategy=tiling_strategy,
-            padding_strategy=padding_strategy,
-            overalp_padding=overalp_padding,
+            tiling_strategy_pars=tiling_strategy_pars,
             start_at_step=start_at_step,
             end_at_step=end_at_step,
             return_with_leftover_noise=return_with_leftover_noise,
