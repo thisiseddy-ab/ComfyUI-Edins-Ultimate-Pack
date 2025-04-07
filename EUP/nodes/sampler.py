@@ -321,6 +321,9 @@ class HierarchicalTilingStrategyParameters():
             "required": {
                 "tiling_mode": (["single-pass", "multi-pass"],),
                 "passes": ("INT", {"default": 2, "min": 2, "max": 8}),
+                "base_model": (["SD 1.4 & SD 1.5", "SDXL 1.0", "SD 2.0", "Flux", "SD 2.1", "SD 3.0", "SD 3.5", "SD 3.5 Large Turbo"],),
+                "VRAM": (["8GB", "6GB", "8GB", "12GB", "16GB", "24GB", "32GB", "40GB"],),
+                "FP": (["FP16", "FP32"],),
             }
         }
 
@@ -333,8 +336,8 @@ class HierarchicalTilingStrategyParameters():
     CATEGORY = "EUP - Ultimate Pack/sampling"
     DESCRIPTION = "Provides the parameters for the overlaping tiling strategy."
 
-    def passParameters(self, tiling_mode, passes):
-        return ((tiling_mode, passes),)
+    def passParameters(self, tiling_mode, passes, base_model, VRAM, FP):
+        return ((tiling_mode, passes, base_model, VRAM, FP),)
     
 class NonUniformTilingStrategyParameters():
     #"tiling_strategy": (["simple", "random", "padded", "adjacency-padded", "context-padded", "overlaping", "adaptive", "hierarchical", "non-uniform"],),
