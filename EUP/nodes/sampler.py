@@ -53,9 +53,9 @@ class Tiled_KSampler():
 
         steps_total = int(steps / denoise)
 
-        return self.ksamplerService.commonKsampler(model=model, seed=seed, steps=steps_total, cfg=cfg, sampler_name=sampler_name, scheduler=scheduler, positive=positive, negative=negative, 
+        return self.ksamplerService.commonKsampler(model=model, seed=seed, steps=steps_total, actual_steps=steps, cfg=cfg, sampler_name=sampler_name, scheduler=scheduler, positive=positive, negative=negative, 
                                     latent=latent_image, sampler_advanced_pars=sampler_advanced_pars, denoise=denoise, disable_noise=disable_noise, start_step=steps_total-steps, 
-                                    last_step=steps_total, force_full_denoise=force_full_denoise, actual_steps=steps,
+                                    last_step=steps_total, force_full_denoise=force_full_denoise,
         )
 
 class Tiled_KSamplerAdvanced():
@@ -101,9 +101,9 @@ class Tiled_KSamplerAdvanced():
         if add_noise == "disable":
             disable_noise = True
         
-        return self.ksamplerService.commonKsampler(model=model, seed=seed, steps=steps, cfg=cfg, sampler_name=sampler_name, scheduler=scheduler, positive=positive, negative=negative, 
+        return self.ksamplerService.commonKsampler(model=model, seed=seed, steps=steps, actual_steps=steps, cfg=cfg, sampler_name=sampler_name, scheduler=scheduler, positive=positive, negative=negative, 
             latent=latent_image, sampler_advanced_pars=sampler_advanced_pars, denoise=denoise, disable_noise=disable_noise, start_step=start_at_step, last_step=end_at_step, 
-            force_full_denoise=force_full_denoise, actual_steps=steps
+            force_full_denoise=force_full_denoise,
         )
 
 class SamplersAdvancedParameters():

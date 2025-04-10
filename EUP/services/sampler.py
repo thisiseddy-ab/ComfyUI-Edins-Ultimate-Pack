@@ -20,8 +20,8 @@ class KSamplerService:
     def __init__(self):
         self.latentService = LatentTilerService()
     
-    def commonKsampler(self, model, seed, steps, cfg, sampler_name, scheduler, positive, negative, latent, sampler_advanced_pars, denoise=1.0, disable_noise=False, 
-                       start_step=None, last_step=None, force_full_denoise=False,actual_steps=30
+    def commonKsampler(self, model, seed, steps, actual_steps, cfg, sampler_name, scheduler, positive, negative, latent, sampler_advanced_pars, denoise=1.0, disable_noise=False, 
+                       start_step=None, last_step=None, force_full_denoise=False,
                        ):
         
         #print(dir(model.model.latent_format))
@@ -47,7 +47,7 @@ class KSamplerService:
 
         # Step 2: Tile Latent **and Noise**
         tiled_latent = self.latentService.tileLatent(
-            model=model, sampler=sampler, seed=seed, latent_image=latent, positive=positive, negative=negative, sampler_advanced_pars=sampler_advanced_pars, 
+            model=model, sampler=sampler, seed=seed, actual_steps=actual_steps, latent_image=latent, positive=positive, negative=negative, sampler_advanced_pars=sampler_advanced_pars, 
             disable_noise=disable_noise, start_step=start_step,
         )
 

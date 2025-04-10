@@ -114,6 +114,44 @@ class Tiling_Strategy_Base():
             allTiles.append(tile_pass_l)
         return allTiles
     
+    def getStepsforSinglePass(self, actualSteps, tilePos):
+        """
+        Returns the number of steps for a single pass.
+        """
+        allSteps = []
+        for t_pos_pass in tilePos:
+            tile_pass_l = []
+            for t_pos_group in t_pos_pass:
+                tile_group_l = []
+                for tp in t_pos_group:
+                    tile_group_l.append(actualSteps)
+                tile_pass_l.append(tile_group_l)
+            allSteps.append(tile_pass_l)
+        return allSteps
+    
+    def getStepsforMultiPass(self, actualSteps, tilePos, passes):
+        """
+        Returns the number of steps for a multi pass.
+        Ensures total steps equal actualSteps by adjusting the last pass.
+        """
+        allSteps = []
+        baseSteps = actualSteps // passes
+        stepRemainder = actualSteps % passes
+
+        for pass_idx, t_pos_pass in enumerate(tilePos):
+            tile_pass_l = []
+            is_last_pass = (pass_idx == passes - 1)
+            steps_this_pass = baseSteps + (stepRemainder if is_last_pass else 0)
+
+            for t_pos_group in t_pos_pass:
+                tile_group_l = []
+                for _ in t_pos_group:
+                    tile_group_l.append(steps_this_pass)
+                tile_pass_l.append(tile_group_l)
+            allSteps.append(tile_pass_l)
+
+        return allSteps
+    
 ###### Singel Pass - Simple Tiling Strategy ######  
 class STService(Tiling_Strategy_Base):
     
@@ -156,6 +194,9 @@ class STService(Tiling_Strategy_Base):
     def getBlendMaskTilesforSTStrategy(self, latentImage, tilePos, blend_strategy, blend_strategy_pars, device: str = 'cpu'):
         return self.getBlendMaskTiles(latentImage, tilePos, blend_strategy, blend_strategy_pars, device)
     
+    def getStepsforSTStrategy(self, actualSteps: int, tilePos):
+        return self.getStepsforSinglePass(actualSteps, tilePos)
+    
 ###### Multi-Pass - Simple Tiling Strategy ######   
 class MP_STService(Tiling_Strategy_Base):
     
@@ -187,6 +228,9 @@ class MP_STService(Tiling_Strategy_Base):
     
     def getBlendMaskTilesforMP_STStrategy(self, latentImage, tilePos, blend_strategy, blend_strategy_pars, device: str ='cpu'):
         return self.st_Service.getBlendMaskTilesforSTStrategy(latentImage, tilePos, blend_strategy, blend_strategy_pars, device)
+    
+    def getStepsforMP_STStrategy(self, actualSteps: int, tilePos, passes : int):
+        return self.getStepsforMultiPass(actualSteps, tilePos, passes)
 
 ###### Singel Pass - Random Tiling Strategy ######   
 class RTService(Tiling_Strategy_Base):
@@ -235,6 +279,9 @@ class RTService(Tiling_Strategy_Base):
     def getBlendMaskTilesforRTStrategy(self, latentImage, tilePos, blend_strategy, blend_strategy_pars, device: str ='cpu'):
         return self.getBlendMaskTiles(latentImage, tilePos, blend_strategy, blend_strategy_pars, device)
     
+    def getStepsforRTStrategy(self, actualSteps: int, tilePos):
+        return self.getStepsforSinglePass(actualSteps, tilePos)
+    
 ###### Multi-Pass - Random Tiling Strategy ######   
 class MP_RTService(Tiling_Strategy_Base):
 
@@ -264,6 +311,9 @@ class MP_RTService(Tiling_Strategy_Base):
     
     def getBlendMaskTilesforMP_RTStrategy(self, latentImage, tilePos, blend_strategy, blend_strategy_pars, device: str ='cpu'):
         return self.rt_Service.getBlendMaskTilesforRTStrategy(latentImage, tilePos, blend_strategy, blend_strategy_pars, device)
+    
+    def getStepsforMP_RTStrategy(self, actualSteps: int, tilePos, passes : int):
+        return self.getStepsforMultiPass(actualSteps, tilePos, passes)
 
 ###### Singel Pass - Padded Tiling Strategy ######
 class PTService(Tiling_Strategy_Base):
@@ -463,6 +513,9 @@ class PTService(Tiling_Strategy_Base):
                 tile_pass_l.append(tile_group_l)
             allTiles.append(tile_pass_l)
         return allTiles
+    
+    def getStepsforPTStrategy(self, actualSteps: int, tilePos):
+        return self.getStepsforSinglePass(actualSteps, tilePos)
 
 ###### Multi-Pass - Padded Tiling Strategy ######  
 class MP_PTService(Tiling_Strategy_Base):
@@ -496,6 +549,9 @@ class MP_PTService(Tiling_Strategy_Base):
 
     def getBlendMaskTilesforMP_PTStrategy(self, latentImage, paddedTiles, blend_strategy, blend_strategy_pars, device: str = 'cpu'):
         return self.pt_Service.getBlendMaskTilesforPTStrategy(latentImage, paddedTiles, blend_strategy, blend_strategy_pars, device)
+    
+    def getStepsforMP_PTStrategy(self, actualSteps: int, tilePos, passes : int):
+        return self.getStepsforMultiPass(actualSteps, tilePos, passes)
 
 ###### Singel Pass - Adjacency Padded Tiling Strategy ######
 class APTService(Tiling_Strategy_Base):
@@ -667,6 +723,9 @@ class APTService(Tiling_Strategy_Base):
     def getBlendMaskTilesforAPTStrategy(self, latentImage, paddedTiles, blend_strategy, blend_strategy_pars, device: str = 'cpu'):
         return self.pt_Service.getBlendMaskTilesforPTStrategy(latentImage, paddedTiles, blend_strategy, blend_strategy_pars, device)
     
+    def getStepsforAPTStrategy(self, actualSteps: int, tilePos):
+        return self.getStepsforSinglePass(actualSteps, tilePos)
+    
     
 ###### Multi-Pass - Adjacency Padded Tiling Strategy ######   
 class MP_APTService(Tiling_Strategy_Base):
@@ -702,6 +761,9 @@ class MP_APTService(Tiling_Strategy_Base):
     
     def getBlendMaskTilesforMP_APTStrategy(self, latentImage, padded_tiles, blend_strategy, blend_strategy_pars, device: str = 'cpu'):
         return self.apt_Service.getBlendMaskTilesforAPTStrategy(latentImage, padded_tiles, blend_strategy, blend_strategy_pars, device)
+    
+    def getStepsforMP_APTStrategy(self, actualSteps: int, tilePos, passes : int):
+        return self.getStepsforMultiPass(actualSteps, tilePos, passes)
 
 
 ###### Singel Pass - Context-Padded Tiling Strategy ######   
@@ -767,6 +829,9 @@ class CPTService(Tiling_Strategy_Base):
     
     def getBlendeMaskTilesforCPTStrategy(self, latentImage, tilePos, blend_strategy, blend_strategy_pars, device: str = 'cpu'):
         return self.getBlendMaskTiles(latentImage, tilePos, blend_strategy, blend_strategy_pars, device)
+    
+    def getStepsforCPTStrategy(self, actualSteps: int, tilePos):
+        return self.getStepsforSinglePass(actualSteps, tilePos)
 
 ###### Multi-Pass - Context-Padded Tiling Strategy ######   
 class MP_CPTService(Tiling_Strategy_Base):
@@ -817,6 +882,9 @@ class MP_CPTService(Tiling_Strategy_Base):
     
     def getBlendeMaskTilesforMP_CPTStrategy(self, latentImage, tilePos, blend_strategy, blend_strategy_pars, device: str = 'cpu'):
         return self.cpt_Service.getBlendeMaskTilesforCPTStrategy(latentImage, tilePos, blend_strategy, blend_strategy_pars, device)
+    
+    def getStepsforMP_CPTStrategy(self, actualSteps: int, tilePos, passes : int):
+        return self.getStepsforMultiPass(actualSteps, tilePos, passes)
 
 ###### Single Pass - Overlap Tiling Strategy ######   
 class OVPStrategy(Tiling_Strategy_Base):
@@ -867,6 +935,9 @@ class OVPStrategy(Tiling_Strategy_Base):
     
     def getBlendeMaskTilesforOVPStrategy(self, latentImage, tilePos, blend_strategy, blend_strategy_pars, device: str = 'cpu'):
         return self.getBlendMaskTiles(latentImage, tilePos, blend_strategy, blend_strategy_pars, device)
+    
+    def getStepsforOVPStrategy(self, actualSteps: int, tilePos):
+        return self.getStepsforSinglePass(actualSteps, tilePos)
 
 ###### Multi-Pass - Overlap Tiling Strategy ######   
 class MP_OVPStrategy(Tiling_Strategy_Base):
@@ -899,6 +970,9 @@ class MP_OVPStrategy(Tiling_Strategy_Base):
     
     def getBlendeMaskTilesforMP_OVPStrategy(self, latentImage, tilePos, blend_strategy, blend_strategy_pars, device: str = 'cpu'):
         return self.ovp_Service.getBlendeMaskTilesforOVPStrategy(latentImage, tilePos, blend_strategy, blend_strategy_pars, device)
+    
+    def getStepsforMP_OVPStrategy(self, actualSteps: int, tilePos, passes : int):
+        return self.getStepsforMultiPass(actualSteps, tilePos, passes)
 
 ###### Single Pass - Adaptive Tiling Strategy ######   
 class ADPService(Tiling_Strategy_Base):
@@ -1008,6 +1082,9 @@ class ADPService(Tiling_Strategy_Base):
     
     def getBlendeMaskTilesforADPStrategy(self, latentImage, tilePos, blend_strategy, blend_strategy_pars, device='cpu'):
         return self.getBlendMaskTiles(latentImage, tilePos, blend_strategy, blend_strategy_pars, device)
+    
+    def getStepsforADPStrategy(self, actualSteps: int, tilePos):
+        return self.getStepsforSinglePass(actualSteps, tilePos)
 
 ###### Multi-Pass - Adaptive Tiling Strategy ######   
 class MP_ADPService(Tiling_Strategy_Base):
@@ -1058,6 +1135,9 @@ class MP_ADPService(Tiling_Strategy_Base):
     
     def getBlendeMaskTilesforMP_ADPStrategy(self, latentImage, tilePos, blend_strategy, blend_strategy_pars, device: str = 'cpu'):
         return self.adp_Service.getBlendeMaskTilesforADPStrategy(latentImage, tilePos, blend_strategy, blend_strategy_pars, device)
+    
+    def getStepsforMP_ADPStrategy(self, actualSteps: int, tilePos, passes : int):
+        return self.getStepsforMultiPass(actualSteps, tilePos, passes)
 
 ###### Single Pass - Hierarchical Tiling Strategy ######  
 class HRCService(Tiling_Strategy_Base):
@@ -1143,6 +1223,9 @@ class HRCService(Tiling_Strategy_Base):
     
     def getBlendMaskTilesforHRCStrategy(self, latentImage, tilePos, blend_strategy, blend_strategy_pars, device: str ='cpu'):
         return self.getBlendMaskTiles(latentImage, tilePos, blend_strategy, blend_strategy_pars, device)
+    
+    def getStepsforHRCStrategy(self, actualSteps: int, tilePos):
+        return self.getStepsforSinglePass(actualSteps, tilePos)
 
 ###### Multiple Pass - Hierarchical Tiling Strategy ######  
 class MP_HRCService(Tiling_Strategy_Base):
@@ -1179,6 +1262,9 @@ class MP_HRCService(Tiling_Strategy_Base):
 
     def getBlendMaskTilesforMP_HRCStrategy(self, latentImage, tilePos, blend_strategy, blend_strategy_pars, device: str = 'cpu'):
         return self.hrc_Service.getBlendMaskTilesforHRCStrategy(latentImage, tilePos, blend_strategy, blend_strategy_pars, device)
+    
+    def getStepsforMP_HRCStrategy(self, actualSteps: int, tilePos, passes : int):
+        return self.getStepsforMultiPass(actualSteps, tilePos, passes)
 
 
 ###### Single Pass - Random-Hierarchical Tiling Strategy ######  
@@ -1317,6 +1403,9 @@ class RTHRCService(Tiling_Strategy_Base):
 
     def getBlendMaskTilesforRTHRCStrategy(self, latentImage, tilePos, blend_strategy, blend_strategy_pars, device='cpu'):
         return self.getBlendMaskTiles(latentImage, tilePos, blend_strategy, blend_strategy_pars, device)
+    
+    def getStepsforHRCStrategy(self, actualSteps: int, tilePos):
+        return self.getStepsforSinglePass(actualSteps, tilePos)
 
 ###### Multi-Pass - Random-Hierarchical Tiling Strategy ######
 class MP_RTHRCService(Tiling_Strategy_Base):
@@ -1362,6 +1451,9 @@ class MP_RTHRCService(Tiling_Strategy_Base):
 
     def getBlendMaskTilesforMP_RTHRCStrategy(self, latentImage, tilePos, blend_strategy, blend_strategy_pars, device: str ='cpu'):
         return self.rthrc_Service.getBlendMaskTilesforRTHRCStrategy(latentImage, tilePos, blend_strategy, blend_strategy_pars, device)
+    
+    def getStepsforMP_RTHRCStrategy(self, actualSteps: int, tilePos, passes : int):
+        return self.getStepsforMultiPass(actualSteps, tilePos, passes)
 
 ###### Single-Pass - Non-Uniform Tiling Strategy ###### 
 class NUService(Tiling_Strategy_Base): 
@@ -1472,6 +1564,9 @@ class NUService(Tiling_Strategy_Base):
     
     def getBlendeMaskTilesforNUStrategy(self, latentImage, tilePos, blend_strategy, blend_strategy_pars, device: str ='cpu'):
         return self.getBlendMaskTiles(latentImage, tilePos, blend_strategy, blend_strategy_pars, device)
+    
+    def getStepsforNUStrategy(self, actualSteps: int, tilePos):
+        return self.getStepsforSinglePass(actualSteps, tilePos)
 
 ###### Multi-Pass - Non-Uniform Tiling Strategy ######  
 class MP_NUService(Tiling_Strategy_Base): 
@@ -1530,6 +1625,9 @@ class MP_NUService(Tiling_Strategy_Base):
     
     def getBlendeMaskTilesforMP_NUStrategy(self, latent_image, tiled_positions, blend_strategy, blend_strategy_pars, device='cpu'):
         return self.nu_Service.getBlendeMaskTilesforNUStrategy(latent_image, tiled_positions, blend_strategy, blend_strategy_pars, device)
+    
+    def getStepsforMP_NUStrategy(self, actualSteps: int, tilePos, passes : int):
+        return self.getStepsforMultiPass(actualSteps, tilePos, passes)
 
 class TilingService(Tiling_Strategy_Base):
 
