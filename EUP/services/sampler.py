@@ -20,9 +20,9 @@ class KSamplerService:
     def __init__(self):
         self.latentService = LatentTilerService()
     
-    def commonKsampler(self, model, seed, steps, cfg, sampler_name, scheduler, positive, negative, latent, tiling_strategy, tiling_strategy_pars, 
-                       denoise=1.0, disable_noise=False, start_step=None, last_step=None, force_full_denoise=False,actual_steps=30
-                        ):
+    def commonKsampler(self, model, seed, steps, cfg, sampler_name, scheduler, positive, negative, latent, sampler_advanced_pars, denoise=1.0, disable_noise=False, 
+                       start_step=None, last_step=None, force_full_denoise=False,actual_steps=30
+                       ):
         
         #print(dir(model.model.latent_format))
         #print("latent_channels:", model.model.latent_format.latent_channels)
@@ -41,14 +41,14 @@ class KSamplerService:
             conds[k] = list(map(lambda a: a.copy(), conds0[k]))
 
         modelPatches, inference_memory = comfy.sampler_helpers.get_additional_models(conds, model.model_dtype())
+
         comfy.model_management.load_models_gpu([model] + modelPatches, model.memory_required(latent.get("samples").shape) + inference_memory)
-        
         sampler = comfy.samplers.KSampler(model, steps=steps, device=device, sampler=sampler_name, scheduler=scheduler, denoise=denoise, model_options=model.model_options)
 
         # Step 2: Tile Latent **and Noise**
         tiled_latent = self.latentService.tileLatent(
-            model=model, sampler=sampler, seed=seed, latent_image=latent, positive=positive, negative=negative, tiling_strategy=tiling_strategy, 
-            tiling_strategy_pars=tiling_strategy_pars,disable_noise=disable_noise, start_step=start_step,
+            model=model, sampler=sampler, seed=seed, latent_image=latent, positive=positive, negative=negative, sampler_advanced_pars=sampler_advanced_pars, 
+            disable_noise=disable_noise, start_step=start_step,
         )
 
         # Step 3: Prepare Needet Resources

@@ -1,3 +1,4 @@
+from typing import Dict, Optional, Any
 
 BASE_MODEL_RES = {
     "SD 1.4 & SD 1.5": {
@@ -644,43 +645,35 @@ BASE_MODEL_RES = {
     },
 }
 
-class BaseModelResolutionService():
-    
-    def getModel(self, model : str) -> dict:
-        
-        model = BASE_MODEL_RES.get(model, None)
-        if(model is None):
+class BaseModelResolutionService:
+    def getModel(self, model: str) -> Dict[str, Any]:
+        model_data = BASE_MODEL_RES.get(model)
+        if model_data is None:
             raise ValueError(f"Model '{model}' not found in base model resolutions")
-        return model
-    
-    def getPrecision(self, model : str, precision : str) -> dict:
+        return model_data
 
-        model = self.getModel(model)
-        precision = model.get(precision, None)
-        if(precision is None):
+    def getPrecision(self, model: str, precision: str) -> Dict[str, Any]:
+        model_data = self.getModel(model)
+        precision_data = model_data.get(precision)
+        if precision_data is None:
             raise ValueError(f"Precision '{precision}' not found for model '{model}'")
-        return precision
-    
-    def getOptions(self, model : str, precision : str, vram : str) -> dict:
+        return precision_data
 
-        precision = self.getPrecision(model, precision)
-        vramOption = precision.get(vram, None)
-        if(vramOption is None):
+    def getVRAM(self, model: str, precision: str, vram: str) -> Dict[str, Any]:
+        precision_data = self.getPrecision(model, precision)
+        vram_option = precision_data.get(vram)
+        if vram_option is None:
             raise ValueError(f"VRAM option '{vram}' not found for model '{model}' and precision '{precision}'")
-        return vramOption
+        return vram_option
 
-    def getPracticalMaxWxH(self, model : str, precision : str, vram : str) -> str:
-        vramOption = self.getOptions(model, precision, vram)
-        return vramOption.get("Practical Max - WxH", None)
-    
-    def getPracticalMaxAverage(self, model : str, precision : str, vram : str) -> int:
-        vramOption = self.getOptions(model, precision, vram)
-        return vramOption.get("Practical Max - Average", None)
-    
-    def getSlowMaxWxH(self, model : str, precision : str, vram : str) -> str:
-        vramOption = self.getOptions(model, precision, vram)
-        return vramOption.get("Slow Max - WxH", None)
-    
-    def getSlowMaxAverage(self, model : str, precision : str, vram : str) -> int:
-        vramOption = self.getOptions(model, precision, vram)
-        return vramOption.get("Slow Max - Average", None)
+    def getPracticalMaxWxH(self, model: str, precision: str, vram: str) -> Optional[str]:
+        return self.getVRAM(model, precision, vram).get("Practical Max - WxH")
+
+    def getPracticalMaxAverage(self, model: str, precision: str, vram: str) -> Optional[int]:
+        return self.getVRAM(model, precision, vram).get("Practical Max - Average")
+
+    def getSlowMaxWxH(self, model: str, precision: str, vram: str) -> Optional[str]:
+        return self.getVRAM(model, precision, vram).get("Slow Max - WxH")
+
+    def getSlowMaxAverage(self, model: str, precision: str, vram: str) -> Optional[int]:
+        return self.getVRAM(model, precision, vram).get("Slow Max - Average")

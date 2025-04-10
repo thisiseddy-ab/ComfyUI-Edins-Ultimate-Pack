@@ -25,10 +25,9 @@ class Tiled_KSampler():
                 "positive": ("CONDITIONING", {"tooltip": "The conditioning describing the attributes you want to include in the image."}),
                 "negative": ("CONDITIONING", {"tooltip": "The conditioning describing the attributes you want to exclude from the image."}),
                 "latent_image": ("LATENT", {"tooltip": "The latent image to denoise."}),
-                "tiling_strategy": (["simple", "random", "padded", "adjacency-padded", "context-padded", "overlaping", "adaptive", "hierarchical", "non-uniform"],),
-                "tiling_strategy_pars": ("TILING_STRG_PARS",),
+                "sampler_advanced_pars": ("SAMPLER_ADVANCED_PARS",),
                 "denoise": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "The amount of denoising applied, lower values will maintain the structure of the initial image allowing for image to image sampling."}),
-            }
+            },
         }
 
     RETURN_TYPES = ("LATENT",)
@@ -39,7 +38,7 @@ class Tiled_KSampler():
     DESCRIPTION = "Uses the provided model, positive and negative conditioning to denoise the latent image."
 
     def sample(self, model, seed, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, 
-               tiling_strategy, tiling_strategy_pars, denoise=1.0,
+               sampler_advanced_pars, denoise=1.0,
                ):
         
         return_with_leftover_noise = "enable"
@@ -53,9 +52,10 @@ class Tiled_KSampler():
             disable_noise = True
 
         steps_total = int(steps / denoise)
+
         return self.ksamplerService.commonKsampler(model=model, seed=seed, steps=steps_total, cfg=cfg, sampler_name=sampler_name, scheduler=scheduler, positive=positive, negative=negative, 
-                                    latent=latent_image, tiling_strategy=tiling_strategy, tiling_strategy_pars=tiling_strategy_pars, denoise=denoise, disable_noise=disable_noise, 
-                                    start_step=steps_total-steps, last_step=steps_total, force_full_denoise=force_full_denoise, actual_steps=steps,
+                                    latent=latent_image, sampler_advanced_pars=sampler_advanced_pars, denoise=denoise, disable_noise=disable_noise, start_step=steps_total-steps, 
+                                    last_step=steps_total, force_full_denoise=force_full_denoise, actual_steps=steps,
         )
 
 class Tiled_KSamplerAdvanced():
@@ -76,8 +76,7 @@ class Tiled_KSamplerAdvanced():
                 "positive": ("CONDITIONING", {"tooltip": "The conditioning describing the attributes you want to include in the image."}),
                 "negative": ("CONDITIONING", {"tooltip": "The conditioning describing the attributes you want to exclude from the image."}),
                 "latent_image": ("LATENT", {"tooltip": "The latent image to denoise."}),
-                "tiling_strategy": (["simple", "random", "padded", "adjacency-padded", "context-padded", "overlaping", "adaptive", "hierarchical", "non-uniform"],),
-                "tiling_strategy_pars": ("TILING_STRG_PARS",),
+                "sampler_advanced_pars": ("SAMPLER_ADVANCED_PARS",),
                 "start_at_step": ("INT", {"default": 0, "min": 0, "max": 10000}),
                 "end_at_step": ("INT", {"default": 10000, "min": 0, "max": 10000}),
                 "return_with_leftover_noise": (["disable", "enable"], ),
@@ -91,8 +90,8 @@ class Tiled_KSamplerAdvanced():
     CATEGORY = "EUP - Ultimate Pack/sampling"
     DESCRIPTION = "Uses the provided model, positive and negative conditioning to denoise the latent image."
 
-    def sample(self, model, add_noise, seed, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, tiling_strategy, tiling_strategy_pars,
-               start_at_step, end_at_step, return_with_leftover_noise, denoise=1.0,
+    def sample(self, model, add_noise, seed, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, sampler_advanced_pars, start_at_step, end_at_step, 
+               return_with_leftover_noise, denoise=1.0,
             ):
         
         force_full_denoise = True
@@ -103,279 +102,51 @@ class Tiled_KSamplerAdvanced():
             disable_noise = True
         
         return self.ksamplerService.commonKsampler(model=model, seed=seed, steps=steps, cfg=cfg, sampler_name=sampler_name, scheduler=scheduler, positive=positive, negative=negative, 
-            latent=latent_image, tiling_strategy=tiling_strategy, tiling_strategy_pars=tiling_strategy_pars, denoise=denoise, disable_noise=disable_noise, 
-            start_step=start_at_step, last_step=end_at_step, force_full_denoise=force_full_denoise, actual_steps=steps
+            latent=latent_image, sampler_advanced_pars=sampler_advanced_pars, denoise=denoise, disable_noise=disable_noise, start_step=start_at_step, last_step=end_at_step, 
+            force_full_denoise=force_full_denoise, actual_steps=steps
         )
-    
-class SimpleTilingStrategyParameters():
+
+class SamplersAdvancedParameters():
 
     @classmethod
     def INPUT_TYPES(s):
         return {
             "required": {
-                "tile_width": ("INT", {"default": 512, "min": 320, "max": MAX_RESOLUTION, "step": 64}),
-                "tile_height": ("INT", {"default": 512, "min": 320, "max": MAX_RESOLUTION, "step": 64}),
-                "tiling_mode": (["single-pass", "multi-pass"],),
-                "passes": ("INT", {"default": 2, "min": 2, "max": 8}),
+                "ksampler_type": (["Eddy's", "BlenderNeko's"],),
+                "tiling_strategy": (["simple", "random", "padded", "adjacency-padded", "context-padded", "overlaping", "adaptive", "hierarchical", "random-hierarchical", "non-uniform"],),
+                "tiling_strategy_pars": ("TILING_STRG_PARS",),
+                "noise_strategy": (["random"],),
+                "noise_mask_strategy": (["standart"],),
+                "denoise_strategy": (["none", "smooth", "aspect-adaption"],),
+                "blend_strategy": (["none", "soft-focus"],),
+            },
+            "optional": {
+                "noise_strategy_pars": ("NOISE_STRG_PARS",),
+                "noise_mask_strategy_pars": ("NOISE_MASK_STRG_PARS",),
+                "denoise_strategy_pars": ("DENOISE_STRG_PARS",),
+                "blend_strategy_pars": ("BLEND_STRG_PARS",),
             }
         }
 
-    RETURN_TYPES = ("TILING_STRG_PARS",)
-    RETURN_NAMES = ("tiling_strategy_pars",)
+    RETURN_TYPES = ("SAMPLER_ADVANCED_PARS",)
+    RETURN_NAMES = ("sampler_advanced_pars",)
 
-    OUTPUT_TOOLTIPS = ("The Strategy Parameters",)
+    OUTPUT_TOOLTIPS = ("The Sampler Advanced Parameters",)
     FUNCTION = "passParameters"
 
     CATEGORY = "EUP - Ultimate Pack/sampling"
-    DESCRIPTION = "Provides the parameters for the simple tiling strategy."
+    DESCRIPTION = "Provides the Advanced parameters for the KSampler"
 
-    def passParameters(self, tile_width, tile_height, tiling_mode, passes):
-        return ((tile_width, tile_height, tiling_mode, passes),)
-    
-class RandomTilingStrategyParameters():
+    def passParameters(self, ksampler_type, tiling_strategy, tiling_strategy_pars, noise_strategy, noise_strategy_pars, noise_mask_strategy, noise_mask_strategy_pars, 
+                       denoise_strategy, denoise_strategy_pars, blend_strategy, blend_strategy_pars
+                    ):
+        return ((ksampler_type, tiling_strategy, tiling_strategy_pars, noise_strategy, noise_strategy_pars, noise_mask_strategy, noise_mask_strategy_pars, 
+                       denoise_strategy, denoise_strategy_pars, blend_strategy, blend_strategy_pars),)   
 
-    @classmethod
-    def INPUT_TYPES(s):
-        return {
-            "required": {
-                "tile_width": ("INT", {"default": 512, "min": 320, "max": MAX_RESOLUTION, "step": 64}),
-                "tile_height": ("INT", {"default": 512, "min": 320, "max": MAX_RESOLUTION, "step": 64}),
-                "tiling_mode": (["single-pass", "multi-pass"],),
-                "passes": ("INT", {"default": 2, "min": 2, "max": 8}),
-            }
-        }
-
-    RETURN_TYPES = ("TILING_STRG_PARS",)
-    RETURN_NAMES = ("tiling_strategy_pars",)
-
-    OUTPUT_TOOLTIPS = ("The Strategy Parameters",)
-    FUNCTION = "passParameters"
-
-    CATEGORY = "EUP - Ultimate Pack/sampling"
-    DESCRIPTION = "Provides the parameters for the random tiling strategy."
-
-    def passParameters(self, tile_width, tile_height, tiling_mode, passes):
-        return ((tile_width, tile_height, tiling_mode, passes),)
-    
-class PaddedTilingStrategyParameters():
-
-    @classmethod
-    def INPUT_TYPES(s):
-        return {
-            "required": {
-                "tile_width": ("INT", {"default": 512, "min": 320, "max": MAX_RESOLUTION, "step": 64}),
-                "tile_height": ("INT", {"default": 512, "min": 320, "max": MAX_RESOLUTION, "step": 64}),
-                "tiling_mode": (["single-pass", "multi-pass"],),
-                "passes": ("INT", {"default": 2, "min": 2, "max": 8}),
-                "padding_strategy": (["organic", "circular", "reflect", "replicate", "zero"],),
-                "padding": ("INT", {"default": 16, "min": 0, "max": 128}),
-            }
-        }
-
-    RETURN_TYPES = ("TILING_STRG_PARS",)
-    RETURN_NAMES = ("tiling_strategy_pars",)
-
-    OUTPUT_TOOLTIPS = ("The Strategy Parameters",)
-    FUNCTION = "passParameters"
-
-    CATEGORY = "EUP - Ultimate Pack/sampling"
-    DESCRIPTION = "Provides the parameters for the padded tiling strategy."
-
-    def passParameters(self, tile_width, tile_height, tiling_mode, passes, padding_strategy, padding):
-        return ((tile_width, tile_height, tiling_mode, passes, padding_strategy, padding),)
-    
-class AdjacencyPaddedTilingStrategyParameters():
-    @classmethod
-    def INPUT_TYPES(s):
-        return {
-            "required": {
-                "tile_width": ("INT", {"default": 512, "min": 320, "max": MAX_RESOLUTION, "step": 64}),
-                "tile_height": ("INT", {"default": 512, "min": 320, "max": MAX_RESOLUTION, "step": 64}),
-                "tiling_mode": (["single-pass", "multi-pass"],),
-                "passes": ("INT", {"default": 2, "min": 2, "max": 8}),
-                "padding_strategy": (["organic", "circular", "reflect", "replicate", "zero"],),
-                "padding": ("INT", {"default": 16, "min": 0, "max": 128}),
-            }
-        }
-
-    RETURN_TYPES = ("TILING_STRG_PARS",)
-    RETURN_NAMES = ("tiling_strategy_pars",)
-
-    OUTPUT_TOOLTIPS = ("The Strategy Parameters",)
-    FUNCTION = "passParameters"
-
-    CATEGORY = "EUP - Ultimate Pack/sampling"
-    DESCRIPTION = "Provides the parameters for the adjacency-padded tiling strategy."
-
-    def passParameters(self, tile_width, tile_height, tiling_mode, passes, padding_strategy, padding):
-        return ((tile_width, tile_height, tiling_mode, passes, padding_strategy, padding),)
-    
-class ContextPaddedTilingStrategyParameters():
-
-    @classmethod
-    def INPUT_TYPES(s):
-        return {
-            "required": {
-                "tile_width": ("INT", {"default": 512, "min": 320, "max": MAX_RESOLUTION, "step": 64}),
-                "tile_height": ("INT", {"default": 512, "min": 320, "max": MAX_RESOLUTION, "step": 64}),
-                "tiling_mode": (["single-pass", "multi-pass"],),
-                "passes": ("INT", {"default": 2, "min": 2, "max": 8}),
-            }
-        }
-
-    RETURN_TYPES = ("TILING_STRG_PARS",)
-    RETURN_NAMES = ("tiling_strategy_pars",)
-
-    OUTPUT_TOOLTIPS = ("The Strategy Parameters",)
-    FUNCTION = "passParameters"
-
-    CATEGORY = "EUP - Ultimate Pack/sampling"
-    DESCRIPTION = "Provides the parameters for the context-padded tiling strategy."
-
-    def passParameters(self, tile_width, tile_height, tiling_mode, passes):
-        return ((tile_width, tile_height, tiling_mode, passes),)
-    
-class OverlapingTilingStrategyParameters():
-
-    @classmethod
-    def INPUT_TYPES(s):
-        return {
-            "required": {
-                "tile_width": ("INT", {"default": 512, "min": 320, "max": MAX_RESOLUTION, "step": 64}),
-                "tile_height": ("INT", {"default": 512, "min": 320, "max": MAX_RESOLUTION, "step": 64}),
-                "tiling_mode": (["single-pass", "multi-pass"],),
-                "passes": ("INT", {"default": 2, "min": 2, "max": 8}),
-                "overalp": ("INT", {"default": 16, "min": 0, "max": 128}),
-            }
-        }
-
-    RETURN_TYPES = ("TILING_STRG_PARS",)
-    RETURN_NAMES = ("tiling_strategy_pars",)
-
-    OUTPUT_TOOLTIPS = ("The Strategy Parameters",)
-    FUNCTION = "passParameters"
-
-    CATEGORY = "EUP - Ultimate Pack/sampling"
-    DESCRIPTION = "Provides the parameters for the overlaping tiling strategy."
-
-    def passParameters(self, tile_width, tile_height, tiling_mode, passes, overalp):
-        return ((tile_width, tile_height, tiling_mode, passes, overalp),)
-    
-
-class OverlapingTilingStrategyParameters():
-
-    @classmethod
-    def INPUT_TYPES(s):
-        return {
-            "required": {
-                "tile_width": ("INT", {"default": 512, "min": 320, "max": MAX_RESOLUTION, "step": 64}),
-                "tile_height": ("INT", {"default": 512, "min": 320, "max": MAX_RESOLUTION, "step": 64}),
-                "tiling_mode": (["single-pass", "multi-pass"],),
-                "passes": ("INT", {"default": 2, "min": 2, "max": 8}),
-                "overalp": ("INT", {"default": 16, "min": 0, "max": 128}),
-            }
-        }
-
-    RETURN_TYPES = ("TILING_STRG_PARS",)
-    RETURN_NAMES = ("tiling_strategy_pars",)
-
-    OUTPUT_TOOLTIPS = ("The Strategy Parameters",)
-    FUNCTION = "passParameters"
-
-    CATEGORY = "EUP - Ultimate Pack/sampling"
-    DESCRIPTION = "Provides the parameters for the overlaping tiling strategy."
-
-    def passParameters(self, tile_width, tile_height, tiling_mode, passes, overalp):
-        return ((tile_width, tile_height, tiling_mode, passes, overalp),)
-
-class AdaptiveTilingStrategyParameters():
-
-    @classmethod
-    def INPUT_TYPES(s):
-        return {
-            "required": {
-                "tile_width": ("INT", {"default": 512, "min": 320, "max": MAX_RESOLUTION, "step": 64}),
-                "tile_height": ("INT", {"default": 512, "min": 320, "max": MAX_RESOLUTION, "step": 64}),
-                "tiling_mode": (["single-pass", "multi-pass"],),
-                "passes": ("INT", {"default": 2, "min": 2, "max": 8}),
-            }
-        }
-
-    RETURN_TYPES = ("TILING_STRG_PARS",)
-    RETURN_NAMES = ("tiling_strategy_pars",)
-
-    OUTPUT_TOOLTIPS = ("The Strategy Parameters",)
-    FUNCTION = "passParameters"
-
-    CATEGORY = "EUP - Ultimate Pack/sampling"
-    DESCRIPTION = "Provides the parameters for the overlaping tiling strategy."
-
-    def passParameters(self, tile_width, tile_height, tiling_mode, passes):
-        return ((tile_width, tile_height, tiling_mode, passes),)
-    
-class HierarchicalTilingStrategyParameters():
-
-    @classmethod
-    def INPUT_TYPES(s):
-        return {
-            "required": {
-                "tiling_mode": (["single-pass", "multi-pass"],),
-                "passes": ("INT", {"default": 2, "min": 2, "max": 8}),
-                "base_model": (["SD 1.4 & SD 1.5", "SDXL 1.0", "SD 2.0", "Flux", "SD 2.1", "SD 3.0", "SD 3.5", "SD 3.5 Large Turbo"],),
-                "VRAM": (["8GB", "6GB", "8GB", "12GB", "16GB", "24GB", "32GB", "40GB"],),
-                "FP": (["FP16", "FP32"],),
-            }
-        }
-
-    RETURN_TYPES = ("TILING_STRG_PARS",)
-    RETURN_NAMES = ("tiling_strategy_pars",)
-
-    OUTPUT_TOOLTIPS = ("The Strategy Parameters",)
-    FUNCTION = "passParameters"
-
-    CATEGORY = "EUP - Ultimate Pack/sampling"
-    DESCRIPTION = "Provides the parameters for the overlaping tiling strategy."
-
-    def passParameters(self, tiling_mode, passes, base_model, VRAM, FP):
-        return ((tiling_mode, passes, base_model, VRAM, FP),)
-    
-class NonUniformTilingStrategyParameters():
-    #"tiling_strategy": (["simple", "random", "padded", "adjacency-padded", "context-padded", "overlaping", "adaptive", "hierarchical", "non-uniform"],),
-    @classmethod
-    def INPUT_TYPES(s):
-        return {
-            "required": {
-                "tile_width": ("INT", {"default": 512, "min": 320, "max": MAX_RESOLUTION, "step": 64}),
-                "tile_height": ("INT", {"default": 512, "min": 320, "max": MAX_RESOLUTION, "step": 64}),
-                "tiling_mode": (["single-pass", "multi-pass"],),
-                "passes": ("INT", {"default": 2, "min": 2, "max": 8}),
-            }
-        }
-
-    RETURN_TYPES = ("TILING_STRG_PARS",)
-    RETURN_NAMES = ("tiling_strategy_pars",)
-
-    OUTPUT_TOOLTIPS = ("The Strategy Parameters",)
-    FUNCTION = "passParameters"
-
-    CATEGORY = "EUP - Ultimate Pack/sampling"
-    DESCRIPTION = "Provides the parameters for the overlaping tiling strategy."
-
-    def passParameters(self, tile_width, tile_height, tiling_mode, passes):
-        return ((tile_width, tile_height, tiling_mode, passes),)
-    
 NODE_CLASS_MAPPINGS = {
     "EUP - Tiled KSampler" : Tiled_KSampler,
     "EUP - Tiled KSampler Advanced" : Tiled_KSamplerAdvanced,
-    "EUP - Simple Tiling Strategy Parameters" : SimpleTilingStrategyParameters,
-    "EUP - Random Tiling Strategy Parameters" : SimpleTilingStrategyParameters,
-    "EUP - Padded Tiling Strategy Parameters" : PaddedTilingStrategyParameters,
-    "EUP - Adjacency Padded Tiling Strategy Parameters" : AdjacencyPaddedTilingStrategyParameters,
-    "EUP - Context Padded Tiling Strategy Parameters" : ContextPaddedTilingStrategyParameters,
-    "EUP - Overlaping Tiling Strategy Parameters" : OverlapingTilingStrategyParameters,
-    "EUP - Adaptive Tiling Strategy Parameters" : AdaptiveTilingStrategyParameters,
-    "EUP - Hierarchical Tiling Strategy Parameters" : HierarchicalTilingStrategyParameters,
-    "EUP - Non-Uniform Tiling Strategy Parameters" : NonUniformTilingStrategyParameters,
+    "EUP - Sampler's Advanced Parameters" : SamplersAdvancedParameters,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {

@@ -24,6 +24,7 @@ _nodes_to_import_ = [
     "latent",
     "sampler",
     "upscaler",
+    "tiling",
     ]
 
 NODE_CLASS_MAPPINGS = {}

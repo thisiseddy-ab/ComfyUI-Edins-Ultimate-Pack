@@ -16,7 +16,7 @@ class T2IService():
 
     def extract_T2I(self, positive, negative):
         t2is = [c['control'] for (_, c) in positive + negative if 'control' in c]
-        t2is = [x for m in t2is for x in self.listService.recursion_toList(m, "previous_controlnet")]  # Recursive extraction
+        t2is = [x for m in t2is for x in self.listService.recursion_toList(m, "previous_controlnet")] 
         return [x for x in t2is if isinstance(x, comfy.controlnet.T2IAdapter)]
     
     def prepareT2I_imgs(self, T2Is, shape):
